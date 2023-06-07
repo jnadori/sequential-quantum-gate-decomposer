@@ -1385,7 +1385,6 @@ tbb::tick_count t0_CPU = tbb::tick_count::now();
 
             }
 */
-std::cout << iter_idx << " " << most_successfull_agent << " " <<  current_minimum_agents[ most_successfull_agent ] << std::endl;
             // ocassionaly recalculate teh current cost functions of the agents
             if ( iter_idx % agent_lifetime_loc == 0 )
             {
