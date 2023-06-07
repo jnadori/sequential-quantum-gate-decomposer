@@ -1485,7 +1485,7 @@ std::cout << iter_idx << " " << most_successfull_agent << " " <<  current_minimu
                  
 
                     // test global convergence 
-                    /*if ( agent_idx == 0 ) {
+                    if ( agent_idx == 0 ) {
                         current_minimum_mean = current_minimum_mean + (current_minimum - current_minimum_vec[ current_minimum_idx ])/current_minimum_vec.size();
                         current_minimum_vec[ current_minimum_idx ] = current_minimum;
                         current_minimum_idx = (current_minimum_idx + 1) % current_minimum_vec.size();
@@ -1504,7 +1504,7 @@ std::cout << iter_idx << " " << most_successfull_agent << " " <<  current_minimu
                             terminate_optimization = true;
                         }            
 
-                   } */  
+                   }   
                     
 
                     
