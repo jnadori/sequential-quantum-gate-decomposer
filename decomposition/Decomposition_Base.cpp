@@ -389,6 +389,7 @@ void  Decomposition_Base::solve_optimization_problem( double* solution_guess, in
             return;
         }
 
+
         // array containing minimums to check convergence of the solution
         long long min_vec_num_loc;
         if ( config.count("min_vec_num") > 0 ) {
@@ -403,7 +404,7 @@ void  Decomposition_Base::solve_optimization_problem( double* solution_guess, in
         }
 
         // setting the initial value for the current minimum
-        current_minimum = 1e8;
+        current_minimum = DBL_MAX;
 
         // store the gates
         std::vector<Gate*> gates_loc = gates;
@@ -465,6 +466,13 @@ void  Decomposition_Base::solve_optimization_problem( double* solution_guess, in
 
         if ( solution_guess_num > 0) {
             memcpy(optimized_parameters.get_data() + parameter_num-solution_guess_num, solution_guess, solution_guess_num*sizeof(double));
+        }
+
+
+        // if the optimization_block = gates.size() then no partitioning of the optimization problem is applied
+        if ( optimization_block >= gates.size() ) {
+            solve_layer_optimization_problem( parameter_num, optimized_parameters );
+            return;
         }
 
         // starting number of gate block applied prior to the optimalized gate blocks
