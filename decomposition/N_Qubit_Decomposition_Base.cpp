@@ -61,6 +61,22 @@ double HS_partial_optimization_problem( Matrix_real parameters, void* void_param
     return params[0]*sin(2*parameters[0] + params[1]) + params[2]*sin(parameters[0] + params[3] ) + params[4];
 }
 
+void N_Qubit_Decomposition_Base::export_current_cost_fnc(double current_minimum){
+	FILE* pFile;
+    std::string filename("costfuncs.txt");
+	if (project_name != ""){filename = project_name + "_" + filename;}
+
+	const char* c_filename = filename.c_str();
+	pFile = fopen(c_filename, "a");
+    	if (pFile==NULL) {
+            fputs ("File error",stderr); 
+            std::string error("Cannot open file.");
+            throw error;
+     }
+     fprintf(pFile,"%f \n",current_minimum);
+     fclose(pFile);
+     return;
+}
 
 /**
 @brief ???????????????
@@ -1362,7 +1378,6 @@ tbb::tick_count t0_CPU = tbb::tick_count::now();
 
             }
 */
-
             // ocassionaly recalculate teh current cost functions of the agents
             if ( iter_idx % agent_lifetime_loc == 0 )
             {
@@ -1457,7 +1472,7 @@ tbb::tick_count t0_CPU = tbb::tick_count::now();
                  
 
                     // test global convergence 
-                    if ( agent_idx == 0 ) {
+                    /*if ( agent_idx == 0 ) {
                         current_minimum_mean = current_minimum_mean + (current_minimum - current_minimum_vec[ current_minimum_idx ])/current_minimum_vec.size();
                         current_minimum_vec[ current_minimum_idx ] = current_minimum;
                         current_minimum_idx = (current_minimum_idx + 1) % current_minimum_vec.size();
@@ -1474,16 +1489,17 @@ tbb::tick_count t0_CPU = tbb::tick_count::now();
                             sstream << "AGENTS, iterations converged to "<< current_minimum << std::endl;
                             print(sstream, 0); 
                             terminate_optimization = true;
-                        }                    
+                        }            
 
-                   }   
+                   } */  
                     
 
                     
                 }   
 
 
-                if ( iter_idx % 2000 == 0 && agent_idx == 0) {
+                if ( iter_idx % agent_lifetime_loc == 0 && agent_idx == 0) {
+                    export_current_cost_fnc(current_minimum);   
                     std::stringstream sstream;
                     sstream << "AGENTS, agent " << agent_idx << ": processed iterations " << (double)iter_idx/max_inner_iterations_loc*100 << "\%";
                     sstream << ", current minimum of agent 0: " << current_minimum_agents[ 0 ] << " global current minimum: " << current_minimum  << " CPU time: " << CPU_time;
@@ -1955,7 +1971,7 @@ pure_DFE_time = 0.0;
                 randomization_successful = 1;
             }
     
-
+            export_current_cost_fnc(current_minimum);
             if ( iter_idx % 5000 == 0 ) {
 
                 Matrix matrix_new = get_transformed_matrix( solution_guess_tmp, gates.begin(), gates.size(), Umtx );
@@ -2129,8 +2145,7 @@ void N_Qubit_Decomposition_Base::solve_layer_optimization_problem_BFGS( int num_
                 Tolmin tolmin(&p);
                 f = tolmin.Solve(solution_guess, false, max_inner_iterations);
             }
-
-
+            export_current_cost_fnc(current_minimum);
             if (current_minimum > f) {
                 current_minimum = f;
                 memcpy( optimized_parameters_mtx.get_data(), solution_guess.get_data(), num_of_parameters*sizeof(double) );
@@ -3204,7 +3219,6 @@ N_Qubit_Decomposition_Base::get_accelerator_num() {
     return accelerator_num;
 
 }
-
 
 #endif
 

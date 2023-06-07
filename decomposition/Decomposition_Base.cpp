@@ -390,7 +390,13 @@ void  Decomposition_Base::solve_optimization_problem( double* solution_guess, in
         }
 
         // array containing minimums to check convergence of the solution
-        const int min_vec_num = 20;
+        long long min_vec_num_loc;
+        if ( config.count("min_vec_num") > 0 ) {
+            config["min_vec_num"].get_property( min_vec_num_loc );
+         
+        }
+        else {min_vec_num_loc=20;}
+        const int min_vec_num = (int) min_vec_num_loc;
         double minimum_vec[min_vec_num];
         for ( int idx=0; idx<min_vec_num; idx++) {
             minimum_vec[idx] = 0;

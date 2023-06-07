@@ -503,7 +503,8 @@ void N_Qubit_Decomposition_adaptive::finalize_circuit(bool prepare_export) {
     cDecomp_custom.set_iteration_loops( iteration_loops );
     cDecomp_custom.set_optimization_tolerance( optimization_tolerance ); 
     cDecomp_custom.set_trace_offset( trace_offset ); 
-    cDecomp_custom.set_optimizer( alg );  
+    cDecomp_custom.set_optimizer( alg );
+    cDecomp_custom.set_project_name(project_name);  
     if (alg==ADAM || alg==BFGS2) { 
         int param_num_loc = gate_structure_loc->get_parameter_num();
         int max_inner_iterations_loc = (double)param_num_loc/852 * 1e7;

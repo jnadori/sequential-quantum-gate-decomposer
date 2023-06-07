@@ -173,7 +173,7 @@ virtual void add_finalyzing_layer();
 void final_optimization();
 
 
-
+void export_current_cost_fnc(double current_minimum);
 /**
 @brief Call to solve layer by layer the optimization problem via calling one of the implemented algorithms. The optimalized parameters are stored in attribute optimized_parameters.
 @param num_of_parameters Number of parameters to be optimized
