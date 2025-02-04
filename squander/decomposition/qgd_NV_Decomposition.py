@@ -28,14 +28,14 @@ along with this program.  If not, see http://www.gnu.org/licenses/.
 
 import numpy as np
 from os import path
-from squander.decomposition.qgd_N_Qubit_Decomposition_adaptive_Wrapper import qgd_N_Qubit_Decomposition_adaptive_Wrapper
+from squander.decomposition.qgd_NV_Decomposition_Wrapper import qgd_NV_Decomposition_Wrapper
 from squander.gates.qgd_Circuit import qgd_Circuit
 
 
 
 ##
 # @brief A QGD Python interface class for the decomposition of N-qubit unitaries into U3 and CNOT gates.
-class qgd_N_Qubit_Decomposition_adaptive(qgd_N_Qubit_Decomposition_adaptive_Wrapper):
+class qgd_NV_Decomposition(qgd_NV_Decomposition_Wrapper):
     
     
 ## 
@@ -92,21 +92,6 @@ class qgd_N_Qubit_Decomposition_adaptive(qgd_N_Qubit_Decomposition_adaptive_Wrap
         super().get_Initial_Circuit()
         
 ##
-# @brief Wrapper function to call the compress_circuit method of C++ class N_Qubit_Decomposition
-    def Compress_Circuit(self,prepare_export=True):
-
-	# call the C wrapper function
-        super().Compress_Circuit()
-
-##
-# @brief Wrapper function to call the finalize_circuit method of C++ class N_Qubit_Decomposition
-# @param prepare_export Logical parameter. Set true to prepare the list of gates to be exported, or false otherwise.
-    def Finalize_Circuit(self,prepare_export=True):
-
-	# call the C wrapper function
-        super().Finalize_Circuit(prepare_export=prepare_export)
-
-##
 # @brief Call to reorder the qubits in the matrix of the gate
 # @param qbit_list The reordered list of qubits spanning the matrix
     def Reorder_Qubits( self, qbit_list ):
@@ -144,86 +129,6 @@ class qgd_N_Qubit_Decomposition_adaptive(qgd_N_Qubit_Decomposition_adaptive_Wrap
         
         return Qiskit_IO.get_Qiskit_Circuit( squander_circuit, parameters )
 
-
-
-
-##
-# @brief Export the unitary decomposition into Qiskit format.
-# @return Return with a Qiskit compatible quantum circuit.
-    def get_Cirq_Circuit( self ):
-
-        import cirq
-
-
-        # creating Cirq quantum circuit
-        circuit = cirq.Circuit()
-
-        # creating qubit register
-        q = cirq.LineQubit.range(self.qbit_num)
-
-        # retrive the list of decomposing gate structure
-        gates = self.get_Gates()
-
-        # constructing quantum circuit
-        for idx in range(len(gates)-1, -1, -1):
-
-            gate = gates[idx]
-
-            if gate.get("type") == "CNOT":
-                # adding CNOT gate to the quantum circuit
-                circuit.append(cirq.CNOT(q[self.qbit_num-1-gate.get("control_qbit")], q[self.qbit_num-1-gate.get("target_qbit")]))
-
-            if gate.get("type") == "CRY":
-                # adding CRY gate to the quantum circuit
-                print("CRY gate needs to be implemented")
-
-            elif gate.get("type") == "CZ":
-                # adding CZ gate to the quantum circuit
-                circuit.append(cirq.CZ(q[self.qbit_num-1-gate.get("control_qbit")], q[self.qbit_num-1-gate.get("target_qbit")]))
-
-            elif gate.get("type") == "CH":
-                # adding CZ gate to the quantum circuit
-                circuit.append(cirq.CH(q[self.qbit_num-1-gate.get("control_qbit")], q[self.qbit_num-1-gate.get("target_qbit")]))
-
-            elif gate.get("type") == "SYC":
-                # Sycamore gate
-                circuit.append(cirq.google.SYC(q[self.qbit_num-1-gate.get("control_qbit")], q[self.qbit_num-1-gate.get("target_qbit")]))
-
-            elif gate.get("type") == "U3":
-                print("Unsupported gate in the Cirq export: U3 gate")
-                return None;
-
-            elif gate.get("type") == "RX":
-                # RX gate
-                circuit.append(cirq.rx(gate.get("Theta")).on(q[self.qbit_num-1-gate.get("target_qbit")]))
-
-            elif gate.get("type") == "RY":
-                # RY gate
-                circuit.append(cirq.ry(gate.get("Theta")).on(q[self.qbit_num-1-gate.get("target_qbit")]))
-
-            elif gate.get("type") == "RZ":
-                # RZ gate
-                circuit.append(cirq.rz(gate.get("Phi")).on(q[self.qbit_num-1-gate.get("target_qbit")]))
-
-            elif gate.get("type") == "X":
-                # X gate
-                circuit.append(cirq.x(q[self.qbit_num-1-gate.get("target_qbit")]))
-
-            elif gate.get("type") == "Y":
-                # Y gate
-                circuit.append(cirq.y(q[self.qbit_num-1-gate.get("target_qbit")]))
-
-            elif gate.get("type") == "Z":
-                # Z gate
-                circuit.append(cirq.z(q[self.qbit_num-1-gate.get("target_qbit")]))
-
-
-            elif gate.get("type") == "SX":
-                # RZ gate
-                circuit.append(cirq.sx(q[self.qbit_num-1-gate.get("target_qbit")]))
-
-
-        return circuit
 
 
 ##
@@ -459,9 +364,9 @@ class qgd_N_Qubit_Decomposition_adaptive(qgd_N_Qubit_Decomposition_adaptive_Wrap
 
 ##
 # @brief Call to add adaptive layers to the gate structure stored by the class.
-    def add_Adaptive_Layers( self ):  
+    def add_NV_Layers( self ):  
 
-        return super().add_Adaptive_Layers()
+        return super().add_NV_Layers()
     
 ##
 # @brief Call to add finalyzing layer (single qubit rotations on all of the qubits) to the gate structure.

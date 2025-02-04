@@ -1018,6 +1018,24 @@ std::vector<Gate*> Decomposition_Base::prepare_gates_to_export( std::vector<Gate
 
 
         }
+        else if (gate->get_type() == CROT_OPERATION) {
+
+            // definig the parameter of the rotational angle
+            double Theta;
+
+            // get the inverse parameters of the RZ rotation
+
+            CROT* crot_gate = static_cast<CROT*>(gate);
+//            parameter_idx = parameter_idx - 1;
+            Theta = std::fmod( 2.0*parameters[parameter_idx], 4*M_PI);
+            parameter_idx = parameter_idx + 1;
+
+
+            crot_gate->set_optimized_parameters( Theta );
+            ops_ret.push_back( static_cast<Gate*>(crot_gate) );
+
+
+        }
         else if (gate->get_type() == RZ_OPERATION) {
 
             // definig the parameter of the rotational angle

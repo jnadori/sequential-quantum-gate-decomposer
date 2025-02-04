@@ -6,6 +6,7 @@ from squander.decomposition.qgd_N_Qubit_Decomposition_adaptive import qgd_N_Qubi
 from squander.decomposition.qgd_N_Qubit_State_Preparation_adaptive import qgd_N_Qubit_State_Preparation_adaptive as N_Qubit_State_Preparation_adaptive
 from squander.decomposition.qgd_N_Qubit_Decomposition_custom import qgd_N_Qubit_Decomposition_custom as N_Qubit_Decomposition_custom
 from squander.decomposition.qgd_N_Qubit_Decomposition import qgd_N_Qubit_Decomposition as N_Qubit_Decomposition
+from squander.decomposition.qgd_NV_Decomposition import qgd_NV_Decomposition as NV_Decomposition
 
 # variational quantum solver
 from squander.variational_quantum_eigensolver.qgd_Variational_Quantum_Eigensolver_Base import qgd_Variational_Quantum_Eigensolver_Base as Variational_Quantum_Eigensolver
@@ -25,6 +26,7 @@ from squander.gates.qgd_RZ import qgd_RZ  as RZ
 from squander.gates.qgd_SX import qgd_SX  as SX 
 from squander.gates.qgd_SYC import qgd_SYC  as SYC 
 from squander.gates.qgd_CRY import qgd_CRY  as CRY 
+from squander.gates.qgd_CROT import qgd_CROT  as CROT 
 
 # quantum circuit
 from squander.gates.qgd_Circuit import qgd_Circuit as Circuit
