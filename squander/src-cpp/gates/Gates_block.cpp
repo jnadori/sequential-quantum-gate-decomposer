@@ -36,6 +36,7 @@ limitations under the License.
 #include "SYC.h"
 #include "UN.h"
 #include "ON.h"
+#include "CROT.h"
 #include "Adaptive.h"
 #include "CZ_NU.h"
 #include "Composite.h"
@@ -887,7 +888,36 @@ void Gates_block::add_cry_to_front(int target_qbit, int control_qbit ) {
 }
 
 
+/**
+@brief Append a RY gate to the list of gates
+@param target_qbit The identification number of the targt qubit. (0 <= target_qbit <= qbit_num-1)
+@param control_qbit The identification number of the control qubit. (0 <= target_qbit <= qbit_num-1)
+*/
+void Gates_block::add_crot(int target_qbit, int control_qbit) {
 
+        // create the operation
+        Gate* operation = static_cast<Gate*>(new CROT( qbit_num, target_qbit, control_qbit));
+
+        // adding the operation to the end of the list of gates
+        add_gate( operation );
+}
+
+
+
+/**
+@brief Add a RY gate to the front of the list of gates
+@param target_qbit The identification number of the targt qubit. (0 <= target_qbit <= qbit_num-1)
+@param control_qbit The identification number of the control qubit. (0 <= target_qbit <= qbit_num-1)
+*/
+void Gates_block::add_crot_to_front(int target_qbit, int control_qbit ) {
+
+        // create the operation
+        Gate* gate = static_cast<Gate*>(new CROT( qbit_num, target_qbit, control_qbit ));
+
+        // adding the operation to the front of the list of gates
+        add_gate_to_front( gate );
+
+}
 
 /**
 @brief Append a CZ_NU gate to the list of gates
@@ -1489,6 +1519,7 @@ gates_num Gates_block::get_gate_nums() {
         gate_nums.cz_nu   = 0;
         gate_nums.un     = 0;
         gate_nums.on     = 0;
+        gate_nums.crot     = 0;
         gate_nums.com     = 0;
         gate_nums.general = 0;
         gate_nums.adap = 0;
@@ -1517,6 +1548,7 @@ gates_num Gates_block::get_gate_nums() {
                 gate_nums.un   = gate_nums.un + gate_nums_loc.un;
                 gate_nums.on   = gate_nums.on + gate_nums_loc.on;
                 gate_nums.com  = gate_nums.com + gate_nums_loc.com;
+                gate_nums.crot  = gate_nums.crot + gate_nums_loc.crot;
                 gate_nums.adap = gate_nums.adap + gate_nums_loc.adap;
                 gate_nums.total = gate_nums.total + gate_nums_loc.total;
 
@@ -1599,6 +1631,10 @@ gates_num Gates_block::get_gate_nums() {
             }            
             else if (gate->get_type() == ADAPTIVE_OPERATION) {
                 gate_nums.adap   = gate_nums.adap + 1;
+                gate_nums.total = gate_nums.total + 1;
+            }
+            else if (gate->get_type() == CROT_OPERATION) {
+                gate_nums.crot   = gate_nums.crot + 1;
                 gate_nums.total = gate_nums.total + 1;
             }
             else {
@@ -1789,6 +1825,19 @@ void Gates_block::list_gates( const Matrix_real &parameters, int start_index ) {
 		print(sstream, 1);	    		                    
                 gate_idx = gate_idx + 1;
             }
+           else if (gate->get_type() == CROT_OPERATION) {
+                // definig the rotation parameter
+                double vartheta;
+                // get the inverse parameters of the U3 rotation
+                CROT* crot_gate = static_cast<CROT*>(gate);
+                vartheta = std::fmod( 2*parameters_data[parameter_idx-1], 4*M_PI);
+                parameter_idx = parameter_idx - 1;
+
+		std::stringstream sstream;
+		sstream << gate_idx << "th gate: CROT on target qubit: " << crot_gate->get_target_qbit() << ", control qubit" << crot_gate->get_control_qbit() << " and with parameters theta = " << vartheta << std::endl;
+		print(sstream, 1);	    		                    
+                gate_idx = gate_idx + 1;
+            }
             else if (gate->get_type() == RZ_OPERATION) {
                 // definig the rotation parameter
                 double varphi;
@@ -1952,6 +2001,10 @@ void Gates_block::reorder_qubits( std::vector<int>  qbit_list) {
              CRY* cry_gate = static_cast<CRY*>(gate);
              cry_gate->reorder_qubits( qbit_list );
          }
+         else if (gate->get_type() == CROT_OPERATION) {
+             CROT* crot_gate = static_cast<CROT*>(gate);
+             crot_gate->reorder_qubits( qbit_list );
+         }
          else if (gate->get_type() == RZ_OPERATION) {
              RZ* rz_gate = static_cast<RZ*>(gate);
              rz_gate->reorder_qubits( qbit_list );
@@ -2114,7 +2167,7 @@ void Gates_block::set_qbit_num( int qbit_num_in ) {
         case SX_OPERATION: case BLOCK_OPERATION:
         case GENERAL_OPERATION: case UN_OPERATION:
         case ON_OPERATION: case COMPOSITE_OPERATION:
-        case ADAPTIVE_OPERATION:
+        case ADAPTIVE_OPERATION: case CROT_OPERATION:
         case H_OPERATION:
         case CZ_NU_OPERATION:
             op->set_qbit_num( qbit_num_in );
@@ -2172,7 +2225,7 @@ int Gates_block::extract_gates( Gates_block* op_block ) {
         case SX_OPERATION: case BLOCK_OPERATION:
         case GENERAL_OPERATION: case UN_OPERATION:
         case ON_OPERATION: case COMPOSITE_OPERATION:
-        case ADAPTIVE_OPERATION: 
+        case ADAPTIVE_OPERATION: case CROT_OPERATION:
         case H_OPERATION: 
         case CZ_NU_OPERATION:
         {
