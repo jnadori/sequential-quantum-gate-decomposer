@@ -278,7 +278,7 @@ Gates_block::apply_to( Matrix_real& parameters_mtx_in, Matrix& input, int parall
                 outer_idx        = block_end[block_idx]-1;
 
 #ifdef USE_AVX
-                apply_large_kernel_to_state_vector_input_AVX(Umtx_mini, input, qbits, input.size() );
+                apply_large_kernel_to_input_AVX(Umtx_mini, input, qbits, input.size() );
 #else
                 apply_large_kernel_to_state_vector_input(Umtx_mini, input, qbits, input.size() );
 #endif                
@@ -1700,6 +1700,13 @@ void Gates_block::list_gates( const Matrix_real &parameters, int start_index ) {
 		print(sstream, 1);   		
                 gate_idx = gate_idx + 1;
             }
+            else if (gate->get_type() == CROT_OPERATION) {
+                CROT* crot_gate = static_cast<CROT*>(gate);
+                std::stringstream sstream;
+		sstream << gate_idx << "th gate: CROT with control qubit: " << crot_gate->get_control_qbit() << " and target qubit: " << crot_gate->get_target_qbit() << std::endl;
+		print(sstream, 1);   		
+                gate_idx = gate_idx + 1;
+            }
             else if (gate->get_type() == CZ_OPERATION) {
                 CZ* cz_gate = static_cast<CZ*>(gate);
 		std::stringstream sstream;
@@ -1822,19 +1829,6 @@ void Gates_block::list_gates( const Matrix_real &parameters, int start_index ) {
 
 		std::stringstream sstream;
 		sstream << gate_idx << "th gate: CRY on target qubit: " << cry_gate->get_target_qbit() << ", control qubit" << cry_gate->get_control_qbit() << " and with parameters theta = " << vartheta << std::endl;
-		print(sstream, 1);	    		                    
-                gate_idx = gate_idx + 1;
-            }
-           else if (gate->get_type() == CROT_OPERATION) {
-                // definig the rotation parameter
-                double vartheta;
-                // get the inverse parameters of the U3 rotation
-                CROT* crot_gate = static_cast<CROT*>(gate);
-                vartheta = std::fmod( 2*parameters_data[parameter_idx-1], 4*M_PI);
-                parameter_idx = parameter_idx - 1;
-
-		std::stringstream sstream;
-		sstream << gate_idx << "th gate: CROT on target qubit: " << crot_gate->get_target_qbit() << ", control qubit" << crot_gate->get_control_qbit() << " and with parameters theta = " << vartheta << std::endl;
 		print(sstream, 1);	    		                    
                 gate_idx = gate_idx + 1;
             }

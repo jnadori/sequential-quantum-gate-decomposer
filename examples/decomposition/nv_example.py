@@ -59,11 +59,12 @@ topology=[(0,1),(0,2)]
 
 ## [create decomposition class]
 ## creating a class to decompose the unitary
-NVDecompose = NV_Decomposition( Umtx.conj().T, level_limit_max=10, level_limit_min=0,topology=topology  )
+NVDecompose = NV_Decomposition( Umtx, level_limit_max=20, topology=topology  )
 NVDecompose.set_Optimizer("BFGS")
 NVDecompose.set_Verbose(3)
+NVDecompose.set_Cost_Function_Variant( 3 )
 ## [create decomposition class]
-
+print(NVDecompose.get_Decomposition_Error())
 
 ## [start decomposition]
 # starting the decomposition
@@ -71,13 +72,15 @@ NVDecompose.get_Initial_Circuit()
 # list the decomposing operations
 ## [start decomposition]
 
-cDecompose = N_Qubit_Decomposition_adaptive( Umtx.conj().T, level_limit_max=10, level_limit_min=0,topology=topology )
+cDecompose = N_Qubit_Decomposition_adaptive( Umtx, level_limit_max=20, topology=topology )
 cDecompose.set_Optimizer("BFGS")
 cDecompose.set_Verbose(3)
+cDecompose.set_Cost_Function_Variant( 3 )
 ## [create decomposition class]
 
 
 ## [start decomposition]
 # starting the decomposition
-cDecompose.get_Initial_Circuit()
+#cDecompose.get_Initial_Circuit()
 # list the decomposing operations
+print(cDecompose.get_Decomposition_Error())

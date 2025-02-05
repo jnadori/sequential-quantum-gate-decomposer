@@ -36,11 +36,11 @@ np.set_printoptions(linewidth=200)
 
 
 # number of qubits
-qbit_num_min = 4
-qbit_num_max = 23
+qbit_num_min = 2
+qbit_num_max = 10
 
 # number of levels
-levels = 4
+levels = 10
 
 random_initial_state = False
 
@@ -63,8 +63,9 @@ for qbit_num in range(qbit_num_min, qbit_num_max+1, 1):
 		initial_state = initial_state_real + initial_state_imag*1j
 		initial_state = initial_state/np.linalg.norm(initial_state)
 	else:
-		initial_state = np.zeros( (matrix_size), dtype=np.complex128 )
-		initial_state[0] = 1.0 + 0j
+		initial_state = np.zeros( (matrix_size,matrix_size), dtype=np.complex128 )
+		#initial_state[0] = 1.0 + 0j
+		initial_state += (1.0+0.j)*np.eye(matrix_size,matrix_size)/matrix_size
 
 	initial_state_squander[ qbit_num ] = initial_state.copy()
 
@@ -81,9 +82,9 @@ for qbit_num in range(qbit_num_min, qbit_num_max+1, 1):
 
 				circuit_squander.add_U3(target_qbit, True, True, True )
 				circuit_squander.add_U3(control_qbit, True, True, True )
-				#circuit_squander.add_CNOT( target_qbit=target_qbit, control_qbit=control_qbit )
-				circuit_squander.add_CRY( target_qbit=target_qbit, control_qbit=control_qbit )
-				gates_num = gates_num + 3
+				circuit_squander.add_CNOT( target_qbit=target_qbit, control_qbit=control_qbit )
+				#circuit_squander.add_CRY( target_qbit=target_qbit, control_qinitial_state.sizebit=control_qbit )
+				#gates_num = gates_num + 3
 
 	for target_qbit in range(qbit_num):
 		circuit_squander.add_U3(target_qbit, True, True, True )
@@ -104,7 +105,8 @@ for qbit_num in range(qbit_num_min, qbit_num_max+1, 1):
 	print( "Time elapsed SQUANDER: ", t_SQUANDER, " seconds at qbit_num = ", qbit_num, ' number of gates: ', gates_num )
 
 	execution_times_squander[ qbit_num ] = t_SQUANDER
-	transformed_states_squander[ qbit_num ] = np.reshape(initial_state, (initial_state.size,) )
+	#transformed_states_squander[ qbit_num ] = np.reshape(initial_state, (matrix_size,matrix_size) )
+	
 	parameters_squander[ qbit_num ] = parameters
 
 
@@ -114,7 +116,7 @@ print( execution_times_squander )
 
 ##########################################################################################################
 ################################ QISKIT #################################################################
-
+"""
 execution_times_qiskit = {}
 transformed_states_qiskit = {}
 
@@ -157,16 +159,16 @@ for qbit_num in range(qbit_num_min, qbit_num_max+1, 1):
 		for control_qbit in range(qbit_num-1):
 			for target_qbit in range(control_qbit+1, qbit_num):
 
-				circuit_qiskit.u(parameters[parameter_idx]*2, parameters[parameter_idx+1], parameters[parameter_idx+2], target_qbit )
+				#circuit_qiskit.u(parameters[parameter_idx]*2, parameters[parameter_idx+1], parameters[parameter_idx+2], target_qbit )
 				parameter_idx = parameter_idx+3
-				circuit_qiskit.u(parameters[parameter_idx]*2, parameters[parameter_idx+1], parameters[parameter_idx+2], control_qbit )
+				#circuit_qiskit.u(parameters[parameter_idx]*2, parameters[parameter_idx+1], parameters[parameter_idx+2], control_qbit )
 				parameter_idx = parameter_idx+3
-				#circuit_qiskit.cx( control_qbit, target_qbit )
-				circuit_qiskit.cry( parameters[parameter_idx]*2, control_qbit, target_qbit )
-				parameter_idx = parameter_idx+1
+				circuit_qiskit.cx( control_qbit, target_qbit )
+				#circuit_qiskit.cry( parameters[parameter_idx]*2, control_qbit, target_qbit )
+				#parameter_idx = parameter_idx+1
 
 	for target_qbit in range(qbit_num):
-		circuit_qiskit.u(parameters[parameter_idx]*2, parameters[parameter_idx+1], parameters[parameter_idx+2], target_qbit )
+		#circuit_qiskit.u(parameters[parameter_idx]*2, parameters[parameter_idx+1], parameters[parameter_idx+2], target_qbit )
 		parameter_idx = parameter_idx+3
 		break
 		
@@ -208,7 +210,7 @@ for qbit_num in range(qbit_num_min, qbit_num_max+1, 1):
 
 print("QISKIT execution times [s]:")
 print( execution_times_qiskit )
-
+"""
 
 from qulacs import Observable, QuantumCircuit, QuantumState
 import qulacs
@@ -246,14 +248,14 @@ for qbit_num in range(qbit_num_min, qbit_num_max+1, 1):
 				circuit_qulacs.add_U3_gate( control_qbit, parameters[parameter_idx]*2, parameters[parameter_idx+1], parameters[parameter_idx+2] )
 				parameter_idx = parameter_idx+3
 
-				#circuit_qulacs.add_CNOT_gate( control_qbit, target_qbit )
+				circuit_qulacs.add_CNOT_gate( target_qbit,control_qbit)
 				
-				RY_gate = qulacs.gate.RotY( target_qbit, parameters[parameter_idx]*2 )
-				RY_gate = qulacs.gate.to_matrix_gate( RY_gate )
-				RY_gate.add_control_qubit( control_qbit, 1)
-				circuit_qulacs.add_gate( RY_gate )
+				#RY_gate = qulacs.gate.RotY( target_qbit, parameters[parameter_idx]*2 )
+				#RY_gate = qulacs.gate.to_matrix_gate( RY_gate )
+				#RY_gate.add_control_qubit( control_qbit, 1)
+				#circuit_qulacs.add_gate( RY_gate )
 				#circuit_qulacs.add_RotY_gate( target_qbit, parameters[parameter_idx]*2 )
-				parameter_idx = parameter_idx+1
+				#parameter_idx = parameter_idx+1
 				
 
 	for target_qbit in range(qbit_num):
@@ -279,13 +281,14 @@ print( execution_times_qulacs )
 print(' ')
 print("Difference between the transformed state vectors:")
 # SQUANDER-QISKIT-Qulacs comparision
-keys = transformed_states_qiskit.keys()
+keys = transformed_states_qulacs.keys()
 for qbit_num in keys:
 	state_squander = transformed_states_squander[ qbit_num ]
-	state_qiskit   = transformed_states_qiskit[ qbit_num ]
+	#state_qiskit   = transformed_states_qiskit[ qbit_num ]
 	state_qulacs   = transformed_states_qulacs[ qbit_num ]
-
-	print( "Squander vs QISKIT: ", np.linalg.norm( state_squander-state_qiskit ) )
-	print( "Squander vs Qulacs: ", np.linalg.norm( state_squander-state_qulacs ) )
+	print( "Squander vs QISKIT: ", np.linalg.norm( state_squander-state_qulacs ) )
+	#print( "QISKIT vs Qulacs: ", np.linalg.norm( state_qiskit-state_qulacs ) )
+	#print(state_squander)
+	#print(state_qulacs)
 	
 

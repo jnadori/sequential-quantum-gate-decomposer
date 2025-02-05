@@ -31,9 +31,11 @@ limitations under the License.
 
 int get_grain_size(int index_step);
 
-void apply_large_kernel_to_state_vector_input(Matrix& unitary, Matrix& input, std::vector<int> involved_qbits, const int& matrix_size);
+void apply_large_kernel_to_input(Matrix& unitary, Matrix& input, std::vector<int> involved_qbits, const int& matrix_size);
 
 void apply_2qbit_kernel_to_state_vector_input(Matrix& two_qbit_unitary, Matrix& input, const int& inner_qbit, const int& outer_qbit, const int& matrix_size);
+
+void apply_2qbit_kernel_to_matrix_input(Matrix& two_qbit_unitary, Matrix& input, const int& inner_qbit, const int& outer_qbit, const int& matrix_size);
 
 void apply_3qbit_kernel_to_state_vector_input(Matrix& unitary, Matrix& input, std::vector<int> involved_qbits, const int& matrix_size);
 
