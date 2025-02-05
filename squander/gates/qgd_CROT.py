@@ -33,13 +33,13 @@ from .qgd_CROT_Wrapper import qgd_CROT_Wrapper
 
 
 ##
-# @brief A QGD Python interface class for the qgd_CROT.
+# @brief A QGD Python interface class for the qgd_CNOT.
 class qgd_CROT(qgd_CROT_Wrapper):
     
     
 ## 
 # @brief Constructor of the class.
-#@param self A pointer pointing to an instance of the class qgd_CROT.
+#@param self A pointer pointing to an instance of the class qgd_CNOT.
 #@param args A tuple of the input arguments: qbit_num (integer)
 #qbit_num: the number of qubits spanning the operations
 #@param kwds A tuple of keywords
@@ -47,27 +47,20 @@ class qgd_CROT(qgd_CROT_Wrapper):
 
     def __init__( self, qbit_num, target_qbit, control_qbit ):
 
+        # initiate variables for input arguments
+        #int  qbit_num = -1; 
         # call the constructor of the wrapper class
         super().__init__(qbit_num, target_qbit, control_qbit)
 
-#@brief  Call to retrieve the gate matrix
-#@param self A pointer pointing to an instance of the class qgd_CROT. 
-#@param parameters_mtx An array of parameters to calculate the matrix.
-
-    def get_Matrix( self, parameters_mtx ):
-
-	# call the C wrapper function
-        return super().get_Matrix( parameters_mtx )
-
-
 #@brief Call to apply the gate operation on the input matrix
-#@param self A pointer pointing to an instance of the class qgd_CROT.
+#@param self A pointer pointing to an instance of the class qgd_CNOT.
 #@param Input arguments: parameters_mtx, unitary_mtx.
 
-    def apply_to( self, parameters_mtx, unitary_mtx):
+    def apply_to( self, unitary_mtx):
 
 	# call the C wrapper function
-        super().apply_to( parameters_mtx, unitary_mtx  )
+        super().apply_to( unitary_mtx )
+
 
 
 #@brief Call to get the number of free parameters in the gate.
@@ -96,7 +89,6 @@ class qgd_CROT(qgd_CROT_Wrapper):
 
 	# call the C wrapper function
         return super().get_Control_Qbit()
-
 
 
 #@brief Call to extract the paramaters corresponding to the gate, from a parameter array associated to the circuit in which the gate is embedded.

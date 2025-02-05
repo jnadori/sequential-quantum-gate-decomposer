@@ -462,6 +462,23 @@ get_gate( N_Qubit_Decomposition_adaptive* decomp, int &idx ) {
         Py_XDECREF(control_qbit);
 
     }
+    else if (gate->get_type() == CROT_OPERATION) {
+
+        // create gate parameters
+        PyObject* type = Py_BuildValue("s",  "CROT" );
+        PyObject* target_qbit = Py_BuildValue("i",  gate->get_target_qbit() );
+        PyObject* control_qbit = Py_BuildValue("i",  gate->get_control_qbit() );
+
+
+        PyDict_SetItemString(py_gate, "type", type );
+        PyDict_SetItemString(py_gate, "target_qbit", target_qbit );
+        PyDict_SetItemString(py_gate, "control_qbit", control_qbit );            
+
+        Py_XDECREF(type);
+        Py_XDECREF(target_qbit);
+        Py_XDECREF(control_qbit);
+
+    }
     else if (gate->get_type() == CZ_OPERATION) {
 
         // create gate parameters
@@ -617,30 +634,6 @@ get_gate( N_Qubit_Decomposition_adaptive* decomp, int &idx ) {
 
         // create gate parameters
         PyObject* type = Py_BuildValue("s",  "CRY" );
-        PyObject* target_qbit = Py_BuildValue("i",  gate->get_target_qbit() );
-        PyObject* control_qbit = Py_BuildValue("i",  gate->get_control_qbit() );
-        PyObject* Theta = Py_BuildValue("f",  parameters[0] );
-
-        PyDict_SetItemString(py_gate, "type", type );
-        PyDict_SetItemString(py_gate, "target_qbit", target_qbit );
-        PyDict_SetItemString(py_gate, "control_qbit", control_qbit );            
-        PyDict_SetItemString(py_gate, "Theta", Theta );
-
-        Py_XDECREF(type);
-        Py_XDECREF(target_qbit);
-        Py_XDECREF(control_qbit);
-        Py_XDECREF(Theta);
-
-    }
-    else if (gate->get_type() == CROT_OPERATION  ) {
-
-        // get U3 parameters
-        CROT* crot_gate = static_cast<CROT*>(gate);
-        Matrix_real&& parameters = crot_gate->get_optimized_parameters();
- 
-
-        // create gate parameters
-        PyObject* type = Py_BuildValue("s",  "CROT" );
         PyObject* target_qbit = Py_BuildValue("i",  gate->get_target_qbit() );
         PyObject* control_qbit = Py_BuildValue("i",  gate->get_control_qbit() );
         PyObject* Theta = Py_BuildValue("f",  parameters[0] );

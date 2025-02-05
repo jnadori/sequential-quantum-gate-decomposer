@@ -49,21 +49,24 @@ inline __m256d complex_mult_AVX(__m256d input_vec, __m256d unitary_row_vec, __m2
 }
 
 
-void apply_large_kernel_to_state_vector_input_AVX(Matrix& unitary, Matrix& input, std::vector<int> involved_qbits, const int& matrix_size){
-
-    switch((int)involved_qbits.size()){
-    case 2:{
-            //apply_2qbit_kernel_to_state_vector_input_parallel_AVX(unitary,input,involved_qbits,matrix_size);
-            apply_2qbit_kernel_to_state_vector_input_AVX(unitary, input, involved_qbits[0], involved_qbits[1], matrix_size);
-    }
-    case 3:{
-        apply_3qbit_kernel_to_state_vector_input_parallel_AVX(unitary,input,involved_qbits,matrix_size);
-    }
-    case 4:{
-            apply_4qbit_kernel_to_state_vector_input_parallel_AVX(unitary,input,involved_qbits,matrix_size);
-    }
-    }
-
+void apply_large_kernel_to_input_AVX(Matrix& unitary, Matrix& input, std::vector<int> involved_qbits, const int& matrix_size){
+    if (input.cols==1){
+      switch((int)involved_qbits.size()){
+      case 2:{
+              //apply_2qbit_kernel_to_state_vector_input_parallel_AVX(unitary,input,involved_qbits,matrix_size);
+              apply_2qbit_kernel_to_state_vector_input_AVX(unitary, input, involved_qbits[0], involved_qbits[1], matrix_size);
+      }
+      case 3:{
+          apply_3qbit_kernel_to_state_vector_input_parallel_AVX(unitary,input,involved_qbits,matrix_size);
+      }
+      case 4:{
+              apply_4qbit_kernel_to_state_vector_input_parallel_AVX(unitary,input,involved_qbits,matrix_size);
+      }
+      }
+  }
+  else{
+      apply_2qbit_kernel_to_matrix_input_AVX(unitary, input, involved_qbits[0], involved_qbits[1], matrix_size);
+  }
 }
 
 
@@ -141,7 +144,7 @@ void apply_2qbit_kernel_to_state_vector_input_AVX(Matrix& two_qbit_unitary, Matr
 
                 for (int idx=0; idx<index_step_inner; idx=idx+2){
                 
-    			    int current_idx_outer_loc = current_idx + current_idx_inner + idx;
+		    int current_idx_outer_loc = current_idx + current_idx_inner + idx;
 		            
                     double* element_outer = (double*)input.get_data() + 2 * current_idx_outer_loc;
                     double* element_inner = element_outer + 2 * index_step_inner;
@@ -212,6 +215,173 @@ void apply_2qbit_kernel_to_state_vector_input_AVX(Matrix& two_qbit_unitary, Matr
                         _mm256_storeu_pd(indices[row_idx], result_vecs[row_idx]);
                     }
 
+                }
+            
+            }
+        }
+        current_idx = current_idx + (index_step_outer << 1);
+    }
+    
+}
+
+void apply_2qbit_kernel_to_matrix_input_AVX(Matrix& two_qbit_unitary, Matrix& input, const int& inner_qbit, const int& outer_qbit, const int& matrix_size){
+
+    int index_step_outer = 1 << outer_qbit;
+    int index_step_inner = 1 << inner_qbit;
+    int current_idx = 0;
+    __m256d neg = _mm256_setr_pd(1.0, -1.0, 1.0, -1.0);
+    for (int current_idx_pair_outer=current_idx + index_step_outer; current_idx_pair_outer<matrix_size; current_idx_pair_outer=current_idx_pair_outer+(index_step_outer << 1)){
+    
+        for (int current_idx_inner = 0; current_idx_inner < index_step_outer; current_idx_inner=current_idx_inner+(index_step_inner<<1)){
+            if (inner_qbit==0){
+        	    for (int idx=0; idx<index_step_inner; idx++){
+            	
+        	int current_idx_outer_loc = current_idx + current_idx_inner + idx;
+	        int current_idx_inner_loc = current_idx + current_idx_inner + idx + index_step_inner;
+          	int current_idx_outer_pair_loc = current_idx_pair_outer + idx + current_idx_inner;
+	        int current_idx_inner_pair_loc = current_idx_pair_outer + idx + current_idx_inner + index_step_inner;
+	        
+	        int row_offset_outer = current_idx_outer_loc*input.cols;
+	        int row_offset_inner = current_idx_inner_loc*input.cols;
+	        int row_offset_outer_pair = current_idx_outer_pair_loc*input.cols;
+	        int row_offset_inner_pair = current_idx_inner_pair_loc*input.cols;
+            	
+            	for (int col_idx=0; col_idx<input.cols;col_idx++){
+            	
+                int current_idx_outer = row_offset_outer + col_idx;
+                int current_idx_inner = row_offset_inner + col_idx;
+                int current_idx_outer_pair = row_offset_outer_pair + col_idx;
+                int current_idx_inner_pair = row_offset_inner_pair + col_idx;
+                
+	        double results[8] = {0.,0.,0.,0.,0.,0.,0.,0.};
+			    
+                double* element_outer = (double*)input.get_data() + 2 * current_idx_outer;
+                double* element_inner = (double*)input.get_data() + 2 * current_idx_inner;
+                double* element_outer_pair = (double*)input.get_data() + 2 * current_idx_outer_pair;
+                double* element_inner_pair = (double*)input.get_data() + 2 * current_idx_inner_pair;
+			    
+                __m256d element_outer_vec = _mm256_loadu_pd(element_outer);
+                element_outer_vec = _mm256_permute4x64_pd(element_outer_vec,0b11011000);
+                __m256d element_inner_vec = _mm256_loadu_pd(element_inner);
+                element_inner_vec = _mm256_permute4x64_pd(element_inner_vec,0b11011000);
+                __m256d outer_inner_vec = _mm256_shuffle_pd(element_outer_vec,element_inner_vec,0b0000);
+                outer_inner_vec = _mm256_permute4x64_pd(outer_inner_vec,0b11011000);
+
+
+                __m256d element_outer_pair_vec = _mm256_loadu_pd(element_outer_pair);
+                element_outer_pair_vec = _mm256_permute4x64_pd(element_outer_pair_vec,0b11011000);
+                __m256d element_inner_pair_vec = _mm256_loadu_pd(element_inner_pair);
+                element_inner_pair_vec = _mm256_permute4x64_pd(element_inner_pair_vec,0b11011000);
+                __m256d outer_inner_pair_vec = _mm256_shuffle_pd(element_outer_pair_vec,element_inner_pair_vec,0b0000);
+                outer_inner_pair_vec = _mm256_permute4x64_pd(outer_inner_pair_vec,0b11011000);
+
+
+
+
+		    for (int mult_idx=0; mult_idx<4; mult_idx++){
+	               double* unitary_row_01 = (double*)two_qbit_unitary.get_data() + 8*mult_idx;
+	               double* unitary_row_23 = (double*)two_qbit_unitary.get_data() + 8*mult_idx + 4;
+			        
+                    __m256d unitary_row_01_vec = _mm256_loadu_pd(unitary_row_01);
+                    __m256d unitary_row_23_vec = _mm256_loadu_pd(unitary_row_23);
+
+                    __m256d result_upper_vec = complex_mult_AVX(outer_inner_vec,unitary_row_01_vec,neg);
+                                
+                    __m256d result_lower_vec = complex_mult_AVX(outer_inner_pair_vec,unitary_row_23_vec,neg);                   
+                    
+                    __m256d result_vec = _mm256_hadd_pd(result_upper_vec,result_lower_vec);
+                    result_vec = _mm256_hadd_pd(result_vec,result_vec);
+                    double* result = (double*)&result_vec;
+                    results[mult_idx*2] = result[0];
+                    results[mult_idx*2+1] = result[2];
+			    }
+		    input[current_idx_outer].real = results[0];
+		    input[current_idx_outer].imag = results[1];
+		    input[current_idx_inner].real = results[2];
+		    input[current_idx_inner].imag = results[3];
+		    input[current_idx_outer_pair].real = results[4];
+		    input[current_idx_outer_pair].imag = results[5];
+		    input[current_idx_inner_pair].real = results[6];
+		    input[current_idx_inner_pair].imag = results[7];
+            	  }
+            	}
+            	
+            }
+            else {
+
+                for (int idx=0; idx<index_step_inner; idx=idx+2){
+                
+		    int current_idx_outer_loc = current_idx + current_idx_inner + idx;
+              	    for (int col_idx=0; col_idx<input.cols;col_idx++){
+                    double* element_outer = (double*)input.get_data() + 2 * (current_idx_outer_loc*input.cols + col_idx);
+                    double* element_inner = element_outer + 2 * (index_step_inner*input.cols + col_idx);
+                    
+                    double* element_outer_pair = element_outer + 2 * (index_step_outer*input.cols + col_idx);
+                    double* element_inner_pair = element_outer_pair + 2 * (index_step_inner*input.cols + col_idx);
+                    
+                    double* indices[4] = {element_outer,element_inner,element_outer_pair,element_inner_pair};
+                    
+                    __m256d element_outer_vec = _mm256_loadu_pd(element_outer);
+                    __m256d element_inner_vec = _mm256_loadu_pd(element_inner);
+
+                    __m256d element_outer_pair_vec = _mm256_loadu_pd(element_outer_pair);
+                    __m256d element_inner_pair_vec = _mm256_loadu_pd(element_inner_pair);
+
+                    __m256d result_vecs[4];
+                    
+                    for (int mult_idx=0; mult_idx<4; mult_idx++){
+		                double* unitary_col_01 = (double*)two_qbit_unitary.get_data() + 8*mult_idx;
+		                double* unitary_col_23 = (double*)two_qbit_unitary.get_data() + 8*mult_idx + 4;
+		                
+		                __m256d unitary_col_01_vec     = _mm256_loadu_pd(unitary_col_01); // a,b,c,d
+		                unitary_col_01_vec             = _mm256_permute4x64_pd(unitary_col_01_vec,0b11011000); // a, c, b, d
+		                __m256d unitary_col_0_vec      = _mm256_shuffle_pd(unitary_col_01_vec,unitary_col_01_vec,0b0000); // a, a, b, b
+		                __m256d unitary_col_1_vec      = _mm256_shuffle_pd(unitary_col_01_vec,unitary_col_01_vec,0b1111); // c, c, d, d
+		                unitary_col_0_vec              = _mm256_permute4x64_pd(unitary_col_0_vec,0b11011000); // a, b, a, b
+		                unitary_col_1_vec              = _mm256_permute4x64_pd(unitary_col_1_vec,0b11011000); // c, d, c, d
+
+		                __m256d unitary_col_23_vec     = _mm256_loadu_pd(unitary_col_23); // a,b,c,d
+		                unitary_col_23_vec             = _mm256_permute4x64_pd(unitary_col_23_vec,0b11011000); // a, c, b, d
+		                __m256d unitary_col_2_vec      = _mm256_shuffle_pd(unitary_col_23_vec,unitary_col_23_vec,0b0000); // a, a, b, b
+		                __m256d unitary_col_3_vec      = _mm256_shuffle_pd(unitary_col_23_vec,unitary_col_23_vec,0b1111); // c, c, d, d
+		                unitary_col_2_vec              = _mm256_permute4x64_pd(unitary_col_2_vec,0b11011000); // a, a, b, b
+		                unitary_col_3_vec              = _mm256_permute4x64_pd(unitary_col_3_vec,0b11011000); // c, c, d, d
+		                
+                        __m256d outer_vec_3            = _mm256_mul_pd(element_outer_vec, unitary_col_0_vec);
+                        __m256d unitary_col_0_switched = _mm256_permute_pd(unitary_col_0_vec, 0x5);
+                        unitary_col_0_switched         = _mm256_mul_pd( unitary_col_0_switched, neg);
+                        __m256d outer_vec_4            = _mm256_mul_pd( element_outer_vec, unitary_col_0_switched);
+                        __m256d result_outer_vec       = _mm256_hsub_pd( outer_vec_3, outer_vec_4);
+
+                        
+                        __m256d inner_vec_3            = _mm256_mul_pd(element_inner_vec, unitary_col_1_vec);
+                        __m256d unitary_col_1_switched = _mm256_permute_pd(unitary_col_1_vec, 0x5);
+                        unitary_col_1_switched         = _mm256_mul_pd( unitary_col_1_switched, neg);
+                        __m256d inner_vec_4            = _mm256_mul_pd( element_inner_vec, unitary_col_1_switched);
+                        __m256d result_inner_vec       = _mm256_hsub_pd( inner_vec_3, inner_vec_4);
+                        
+                        __m256d outer_pair_vec_3       = _mm256_mul_pd(element_outer_pair_vec, unitary_col_2_vec);
+                        __m256d unitary_col_2_switched = _mm256_permute_pd(unitary_col_2_vec, 0x5);
+                        unitary_col_2_switched         = _mm256_mul_pd( unitary_col_2_switched, neg);
+                        __m256d outer_pair_vec_4       = _mm256_mul_pd( element_outer_pair_vec, unitary_col_2_switched);
+                        __m256d result_outer_pair_vec  = _mm256_hsub_pd( outer_pair_vec_3, outer_pair_vec_4);
+
+                        
+                        __m256d inner_pair_vec_3       = _mm256_mul_pd(element_inner_pair_vec, unitary_col_3_vec);
+                        __m256d unitary_col_3_switched = _mm256_permute_pd(unitary_col_3_vec, 0x5);
+                        unitary_col_3_switched         = _mm256_mul_pd( unitary_col_3_switched, neg);
+                        __m256d inner_pair_vec_4       = _mm256_mul_pd( element_inner_pair_vec, unitary_col_3_switched);
+                        __m256d result_inner_pair_vec  = _mm256_hsub_pd( inner_pair_vec_3, inner_pair_vec_4);
+                        
+                        __m256d result_vec    = _mm256_add_pd(result_outer_vec,result_inner_vec);
+                        result_vec            = _mm256_add_pd(result_vec,result_outer_pair_vec);
+                        result_vec            = _mm256_add_pd(result_vec,result_inner_pair_vec);
+                        result_vecs[mult_idx] = result_vec;
+                    }
+                    for (int row_idx=0; row_idx<4;row_idx++){
+                        _mm256_storeu_pd(indices[row_idx], result_vecs[row_idx]);
+                    }
+                  }
                 }
             
             }

@@ -707,16 +707,15 @@ NV_Decomposition::construct_nv_gate_layers() {
 
             Gates_block* layer = new Gates_block( qbit_num );
 
-            /*layer->add_rz(target_qbit_loc);
-            layer->add_ry(target_qbit_loc);
+            layer->add_rz(target_qbit_loc);
+            layer->add_rx(target_qbit_loc);
             layer->add_rz(target_qbit_loc);
             layer->add_rz(control_qbit_loc);
-            layer->add_ry(control_qbit_loc);
-            layer->add_rz(control_qbit_loc);*/
-            layer->add_u3(target_qbit_loc,true,true,true);
-            layer->add_u3(control_qbit_loc,true,true,true);
+            layer->add_rx(control_qbit_loc);
+            layer->add_rz(control_qbit_loc);
+            //layer->add_u3(control_qbit_loc, true,true,true);
+            //layer->add_u3(target_qbit_loc, true,true,true);
             layer->add_crot(target_qbit_loc, control_qbit_loc);
-
             layers.push_back(layer);
 
 
@@ -800,7 +799,10 @@ NV_Decomposition::add_finalyzing_layer( Gates_block* gate_structure ) {
             bool Theta = true;
             bool Phi = true;
             bool Lambda = true;
-            block->add_u3(idx, Theta, Phi, Lambda);
+            block->add_rz(idx);
+            block->add_ry(idx);
+            block->add_rz(idx);
+            //block->add_u3(idx, Theta, Phi, Lambda);
 //        block->add_ry(idx);
     }
 

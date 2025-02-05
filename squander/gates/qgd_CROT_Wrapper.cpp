@@ -132,44 +132,6 @@ qgd_CROT_Wrapper_init(qgd_CROT_Wrapper *self, PyObject *args, PyObject *kwds)
     return 0;
 }
 
-/**
-@brief Extract the optimized parameters
-@param start_index The index of the first inverse gate
-*/
-static PyObject *
-qgd_CROT_Wrapper_get_Matrix( qgd_CROT_Wrapper *self, PyObject *args ) {
-
-    PyArrayObject * parameters_arr = NULL;
-
-
-    // parsing input arguments
-    if (!PyArg_ParseTuple(args, "|O", &parameters_arr )) 
-        return Py_BuildValue("i", -1);
-
-    
-    if ( PyArray_IS_C_CONTIGUOUS(parameters_arr) ) {
-        Py_INCREF(parameters_arr);
-    }
-    else {
-        parameters_arr = (PyArrayObject*)PyArray_FROM_OTF( (PyObject*)parameters_arr, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
-    }
-
-
-    // get the C++ wrapper around the data
-    Matrix_real&& parameters_mtx = numpy2matrix_real( parameters_arr );
-
-    int parallel = 1;
-    Matrix CROT_mtx = self->gate->get_matrix( parameters_mtx, parallel );
-    
-    // convert to numpy array
-    CROT_mtx.set_owner(false);
-    PyObject *CROT_py = matrix_to_numpy( CROT_mtx );
-
-
-    Py_DECREF(parameters_arr);
-
-    return CROT_py;
-}
 
 
 
@@ -216,7 +178,7 @@ qgd_CROT_Wrapper_apply_to( qgd_CROT_Wrapper *self, PyObject *args ) {
     Matrix unitary_mtx = numpy2matrix(unitary);
 
     int parallel = 1;
-    self->gate->apply_to( parameters_mtx, unitary_mtx, parallel );
+    self->gate->apply_to(unitary_mtx, parallel );
     
     if (unitary_mtx.data != PyArray_DATA(unitary)) {
         memcpy(PyArray_DATA(unitary), unitary_mtx.data, unitary_mtx.size() * sizeof(QGD_Complex16));
@@ -383,14 +345,8 @@ static PyMemberDef qgd_CROT_Wrapper_members[] = {
 @brief Structure containing metadata about the methods of class qgd_CROT_Wrapper.
 */
 static PyMethodDef qgd_CROT_Wrapper_methods[] = {
-    {"get_Matrix", (PyCFunction) qgd_CROT_Wrapper_get_Matrix, METH_VARARGS,
-     "Method to get the matrix of the operation."
-    },
     {"apply_to", (PyCFunction) qgd_CROT_Wrapper_apply_to, METH_VARARGS,
      "Call to apply the gate on the input matrix."
-    },
-    {"get_Gate_Kernel", (PyCFunction) qgd_CROT_Wrapper_get_Gate_Kernel, METH_VARARGS,
-     "Call to calculate the gate matrix acting on a single qbit space."
     },
     {"get_Parameter_Num", (PyCFunction) qgd_CROT_Wrapper_get_Parameter_Num, METH_NOARGS,
      "Call to get the number of free parameters in the gate."

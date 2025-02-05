@@ -16,25 +16,25 @@ limitations under the License.
 
 @author: Peter Rakyta, Ph.D.
 */
-/*! \file CROT.h
-    \brief Header file for a class representing a controlled rotation gate around the Y axis.
+/*! \file CNOT.h
+    \brief Header file for a class representing a CNOT operation.
 */
 
 #ifndef CROT_H
 #define CROT_H
 
-#include "RY.h"
-#include "CNOT.h"
 #include "matrix.h"
-#include "matrix_real.h"
+#include "Gate.h"
 #define _USE_MATH_DEFINES
 #include <math.h>
 
 
 /**
-@brief A class representing a CROT gate.
+@brief A class representing a CNOT operation.
 */
-class CROT: public RY {
+class CROT: public Gate {
+
+protected:
 
 
 public:
@@ -47,55 +47,44 @@ CROT();
 
 /**
 @brief Constructor of the class.
-@param qbit_num_in The number of qubits spanning the gate.
-@param target_qbit_in The 0<=ID<qbit_num of the target qubit.
-@param theta_in logical value indicating whether the matrix creation takes an argument theta.
-@param phi_in logical value indicating whether the matrix creation takes an argument phi
-@param lambda_in logical value indicating whether the matrix creation takes an argument lambda
+@param qbit_num_in The number of qubits in the unitaries
+@param target_qbit_in The identification number of the target qubit. (0 <= target_qbit <= qbit_num-1)
+@param control_qbit_in The identification number of the control qubit. (0 <= target_qbit <= qbit_num-1)
 */
-CROT(int qbit_num_in, int target_qbit_in, int control_qbit_in);
+CROT(int qbit_num_in, int target_qbit_in,  int control_qbit_in);
 
 /**
 @brief Destructor of the class
 */
 virtual ~CROT();
 
-
 /**
-@brief Call to apply the gate on the input array/matrix by CROT*input
-@param parameters An array of the input parameters.
+@brief Call to apply the gate on the input array/matrix by CNOT*input
 @param input The input array on which the gate is applied
 @param parallel Set 0 for sequential execution, 1 for parallel execution with OpenMP and 2 for parallel with TBB (optional)
 */
-virtual void apply_to( Matrix_real& parameters, Matrix& input, int parallel=0  );
+virtual void apply_to( Matrix& input, int parallel=0 );
 
 
 /**
-@brief Call to apply the gate on the input array/matrix by input*CROT
-@param parameters An array of parameters to calculate the matrix of the U3 gate.
+@brief Call to apply the gate on the input array/matrix by input*CNOT
 @param input The input array on which the gate is applied
 */
-virtual void apply_from_right( Matrix_real& parameters, Matrix& input );
-
-/**
-@brief Call to evaluate the derivate of the circuit on an inout with respect to all of the free parameters.
-@param parameters An array of the input parameters.
-@param input The input array on which the gate is applied
-*/
-virtual std::vector<Matrix> apply_derivate_to( Matrix_real& parameters, Matrix& input );
+virtual void apply_from_right( Matrix& input );
 
 
 /**
-@brief Call to set the final optimized parameters of the gate.
-@param Theta Real parameter standing for the parameter theta.
+@brief Call to set the number of qubits spanning the matrix of the operation
+@param qbit_num The number of qubits
 */
-void set_optimized_parameters(double Theta );
+virtual void set_qbit_num(int qbit_num);
 
 /**
-@brief Call to get the final optimized parameters of the gate.
-@param parameters_in Preallocated pointer to store the parameters Theta, Phi and Lambda of the U3 gate.
+@brief Call to reorder the qubits in the matrix of the operation
+@param qbit_list The reordered list of qubits spanning the matrix
 */
-Matrix_real get_optimized_parameters();
+virtual void reorder_qubits( std::vector<int> qbit_list);
+
 
 /**
 @brief Call to create a clone of the present class
@@ -103,16 +92,6 @@ Matrix_real get_optimized_parameters();
 */
 virtual CROT* clone();
 
-
-/**
-@brief Call to extract parameters from the parameter array corresponding to the circuit, in which the gate is embedded.
-@param parameters The parameter array corresponding to the circuit in which the gate is embedded
-@return Returns with the array of the extracted parameters.
-*/
-virtual Matrix_real extract_parameters( Matrix_real& parameters );
-
 };
 
-
 #endif //CROT
-

@@ -21,8 +21,8 @@ limitations under the License.
 */
 
 #include "CNOT.h"
-
-
+#include "apply_large_kernel_to_input.h"
+#include "apply_large_kernel_to_input_AVX.h"
 using namespace std;
 
 
@@ -134,9 +134,29 @@ CNOT::get_matrix( int parallel) {
 void 
 CNOT::apply_to( Matrix& input, int parallel ) {
  
+    /*Matrix u3_1qbit = calc_one_qubit_u3();
+    apply_kernel_to(u3_1qbit, input, false, parallel);*/
+    
+    Matrix U_2qbit(4,4);
+    memset(U_2qbit.get_data(),0.0,(U_2qbit.size()*2)*sizeof(double));
+    /*double invroottwo = 1./std::sqrt(2);
+    U_2qbit[0].real = invroottwo;
+    U_2qbit[1].real = invroottwo;
+    U_2qbit[1*4].real = -1.*invroottwo;
+    U_2qbit[1*4+1].real = invroottwo;
+    U_2qbit[2*4+2].real = invroottwo;
+    U_2qbit[2*4+3].real = -1*invroottwo;
+    U_2qbit[3*4+3].real = invroottwo;
+    U_2qbit[3*4+2].real = invroottwo;*/
+    U_2qbit[0].real = 1;
+    U_2qbit[5].real = 1;
+    U_2qbit[11].real = 1;
+    U_2qbit[14].real = 1;
+    // apply the computing kernel on the matrix
+    std::vector<int> involved_qbits = {control_qbit,target_qbit};
+    //apply_large_kernel_to_input(U_2qbit,input,involved_qbits,input.size());
 
-    Matrix u3_1qbit = calc_one_qubit_u3();
-    apply_kernel_to(u3_1qbit, input, false, parallel);
+    apply_2qbit_kernel_to_matrix_input(U_2qbit,input,control_qbit,target_qbit,input.size());
 
 
 }

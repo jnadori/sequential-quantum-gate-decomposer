@@ -35,8 +35,9 @@ int get_grain_size(int index_step){
     return grain_size;
 }
 
-void apply_large_kernel_to_state_vector_input(Matrix& unitary, Matrix& input, std::vector<int> involved_qbits, const int& matrix_size){
+void apply_large_kernel_to_input(Matrix& unitary, Matrix& input, std::vector<int> involved_qbits, const int& matrix_size){
 
+    if (input.cols==1){
     switch((int)involved_qbits.size()){
     case 2:{
         apply_2qbit_kernel_to_state_vector_input(unitary, input, involved_qbits[0], involved_qbits[1], matrix_size);
@@ -45,7 +46,11 @@ void apply_large_kernel_to_state_vector_input(Matrix& unitary, Matrix& input, st
         apply_3qbit_kernel_to_state_vector_input(unitary,input,involved_qbits,matrix_size);
     }
     }
-
+    }
+    else
+    {
+        apply_2qbit_kernel_to_matrix_input(unitary, input, involved_qbits[0], involved_qbits[1], matrix_size);
+    }
 }
 
 void apply_2qbit_kernel_to_state_vector_input(Matrix& two_qbit_unitary, Matrix& input, const int& inner_qbit, const int& outer_qbit, const int& matrix_size){
@@ -63,10 +68,11 @@ void apply_2qbit_kernel_to_state_vector_input(Matrix& two_qbit_unitary, Matrix& 
 
 			int current_idx_outer_loc = current_idx + current_idx_inner + idx;
 			int current_idx_inner_loc = current_idx + current_idx_inner + idx + index_step_inner;
-	                int current_idx_outer_pair_loc = current_idx_pair_outer + idx + current_idx_inner;
+            int current_idx_outer_pair_loc = current_idx_pair_outer + idx + current_idx_inner;
 			int current_idx_inner_pair_loc = current_idx_pair_outer + idx + current_idx_inner + index_step_inner;
 			int indexes[4] = {current_idx_outer_loc,current_idx_inner_loc,current_idx_outer_pair_loc,current_idx_inner_pair_loc};
-			//input.print_matrix();
+            std::cout<<current_idx_outer_loc<<" "<<current_idx_inner_loc<<" "<<current_idx_outer_pair_loc<<" "<<current_idx_inner_pair_loc<<std::endl;
+			
 			QGD_Complex16 element_outer = input[current_idx_outer_loc];
 			QGD_Complex16 element_outer_pair = input[current_idx_outer_pair_loc];
 			QGD_Complex16 element_inner = input[current_idx_inner_loc];
@@ -86,6 +92,61 @@ void apply_2qbit_kernel_to_state_vector_input(Matrix& two_qbit_unitary, Matrix& 
 				input[indexes[mult_idx]].imag = tmp1.imag + tmp2.imag + tmp3.imag + tmp4.imag;
 			}
         	}
+        }
+        current_idx = current_idx + (index_step_outer << 1);
+    }
+
+}
+
+void apply_2qbit_kernel_to_matrix_input(Matrix& two_qbit_unitary, Matrix& input, const int& inner_qbit, const int& outer_qbit, const int& matrix_size){
+
+    int index_step_outer = 1 << outer_qbit;
+    int index_step_inner = 1 << inner_qbit;
+    int current_idx = 0;
+    
+    for (int current_idx_pair_outer=current_idx + index_step_outer; current_idx_pair_outer<matrix_size; current_idx_pair_outer=current_idx_pair_outer+(index_step_outer << 1)){
+    
+        for (int current_idx_inner = 0; current_idx_inner < index_step_outer; current_idx_inner=current_idx_inner+(index_step_inner<<1)){
+        
+        	for (int idx=0; idx<index_step_inner; idx++){
+        	
+			int current_idx_outer_loc = current_idx + current_idx_inner + idx;
+			int current_idx_inner_loc = current_idx + current_idx_inner + idx + index_step_inner;
+            int current_idx_outer_pair_loc = current_idx_pair_outer + idx + current_idx_inner;
+			int current_idx_inner_pair_loc = current_idx_pair_outer + idx + current_idx_inner + index_step_inner;
+			
+            int row_offset_outer = current_idx_outer_loc*input.stride;
+            int row_offset_outer_pair = current_idx_outer_pair_loc*input.stride;
+            int row_offset_inner = current_idx_inner_loc*input.stride;
+            int row_offset_inner_pair = current_idx_inner_pair_loc*input.stride;
+            std::cout<<input.rows<<" "<<input.cols<<std::endl;
+			//input.print_matrix();
+            for ( int col_idx=0; col_idx<input.cols; col_idx++) {
+                int index_outer      = row_offset_outer+col_idx;
+                int index_outer_pair = row_offset_outer_pair+col_idx;     
+                int index_inner = row_offset_inner+col_idx;
+                int index_inner_pair = row_offset_inner_pair + col_idx;
+      			int indexes[4] = {index_outer,index_inner,index_outer_pair,index_inner_pair};
+			QGD_Complex16 element_outer = input[index_outer];
+			QGD_Complex16 element_outer_pair = input[index_outer_pair];
+			QGD_Complex16 element_inner = input[index_inner];
+			QGD_Complex16 element_inner_pair = input[index_inner_pair];
+			
+			QGD_Complex16 tmp1;
+			QGD_Complex16 tmp2;
+			QGD_Complex16 tmp3;
+			QGD_Complex16 tmp4;
+			for (int mult_idx=0; mult_idx<4; mult_idx++){
+			
+				tmp1 = mult(two_qbit_unitary[mult_idx*4], element_outer);
+				tmp2 = mult(two_qbit_unitary[mult_idx*4 + 1], element_inner);
+				tmp3 = mult(two_qbit_unitary[mult_idx*4 + 2], element_outer_pair);
+				tmp4 = mult(two_qbit_unitary[mult_idx*4 + 3], element_inner_pair);
+				input[indexes[mult_idx]].real = tmp1.real + tmp2.real + tmp3.real + tmp4.real;
+				input[indexes[mult_idx]].imag = tmp1.imag + tmp2.imag + tmp3.imag + tmp4.imag;
+			 }
+			 }
+    	    }
         }
         current_idx = current_idx + (index_step_outer << 1);
     }

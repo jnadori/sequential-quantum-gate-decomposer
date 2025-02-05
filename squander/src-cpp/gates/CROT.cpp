@@ -17,7 +17,7 @@ limitations under the License.
 @author: Peter Rakyta, Ph.D.
 */
 /*! \file CROT.cpp
-    \brief Class representing a controlled rotation gate.
+    \brief Class representing a CROT gate.
 */
 
 #include "CROT.h"
@@ -25,44 +25,69 @@ limitations under the License.
 #include "apply_large_kernel_to_input.h"
 
 
-//static tbb::spin_mutex my_mutex;
+using namespace std;
+
+
 /**
 @brief Nullary constructor of the class.
 */
-CROT::CROT() : RY() {
+CROT::CROT() {
 
+        // number of qubits spanning the matrix of the gate
+        qbit_num = -1;
+        // the size of the matrix
+        matrix_size = -1;
         // A string describing the type of the gate
         type = CROT_OPERATION;
+        // The number of free parameters
+        parameter_num = 0;
+
+        // The index of the qubit on which the gate acts (target_qbit >= 0)
+        target_qbit = -1;
+
+        // The index of the qubit which acts as a control qubit (control_qbit >= 0) in controlled gate
+        control_qbit = -1;
+
 
 }
 
 
-
 /**
 @brief Constructor of the class.
-@param qbit_num_in The number of qubits spanning the gate.
-@param target_qbit_in The 0<=ID<qbit_num of the target qubit.
-@param theta_in logical value indicating whether the matrix creation takes an argument theta.
-@param phi_in logical value indicating whether the matrix creation takes an argument phi
-@param lambda_in logical value indicating whether the matrix creation takes an argument lambda
+@param qbit_num_in The number of qubits in the unitaries
+@param target_qbit_in The identification number of the target qubit. (0 <= target_qbit <= qbit_num-1)
+@param control_qbit_in The identification number of the control qubit. (0 <= target_qbit <= qbit_num-1)
 */
-CROT::CROT(int qbit_num_in, int target_qbit_in, int control_qbit_in) : RY(qbit_num_in, target_qbit_in) {
+CROT::CROT(int qbit_num_in,  int target_qbit_in, int control_qbit_in) {
 
-
+ 
+        // number of qubits spanning the matrix of the gate
+        qbit_num = qbit_num_in;
+        // the size of the matrix
+        matrix_size = Power_of_2(qbit_num);
         // A string describing the type of the gate
         type = CROT_OPERATION;
+        // The number of free parameters
+        parameter_num = 0;
+
+        if (target_qbit_in >= qbit_num) {
+            std::stringstream sstream;	   
+            sstream << "The index of the target qubit is larger than the number of qubits" << std::endl;
+            print(sstream, 0);	    	
+            throw sstream.str();
+        }
+        // The index of the qubit on which the gate acts (target_qbit >= 0)
+        target_qbit = target_qbit_in;
 
 
         if (control_qbit_in >= qbit_num) {
 	    std::stringstream sstream;
-	    sstream << "The index of the control qubit is larger than the number of qubits in CROT gate." << std::endl;
-	    print(sstream, 0);	  
+            sstream << "The index of the control qubit is larger than the number of qubits" << std::endl;
+            print(sstream, 0);	    	
             throw sstream.str();
         }
-
-        // The index of the qubit which acts as a control qubit (control_qbit >= 0) in controlled gates
+        // The index of the qubit which acts as a control qubit (control_qbit >= 0) in controlled gate
         control_qbit = control_qbit_in;
-        target_qbit = target_qbit_in;
 
 
 }
@@ -71,20 +96,18 @@ CROT::CROT(int qbit_num_in, int target_qbit_in, int control_qbit_in) : RY(qbit_n
 @brief Destructor of the class
 */
 CROT::~CROT() {
-
 }
 
 
-
-
 /**
-@brief Call to apply the gate on the input array/matrix by CRY3*input
-@param parameters An array of parameters to calculate the matrix of the U3 gate.
+@brief Call to apply the gate on the input array/matrix CNOT*input
 @param input The input array on which the gate is applied
 @param parallel Set 0 for sequential execution, 1 for parallel execution with OpenMP and 2 for parallel with TBB (optional)
 */
 void 
-CROT::apply_to( Matrix_real& parameters, Matrix& input, int parallel ) {
+CROT::apply_to( Matrix& input, int parallel ) {
+ 
+
 
 
     if (input.rows != matrix_size ) {
@@ -94,10 +117,6 @@ CROT::apply_to( Matrix_real& parameters, Matrix& input, int parallel ) {
         exit(-1);
     }
 
-
-    double ThetaOver2;
-
-    ThetaOver2 = parameters[0];
 /*
     ThetaOver2 = theta0;
     Phi = parameters[0];
@@ -110,146 +129,67 @@ Phi = Phi - M_PI;
 */
 //Phi = 0.5*(1.0-std::cos(Phi))*M_PI;
 
-    // get the U3 gate of one qubit
     Matrix U_2qbit(4,4);
     memset(U_2qbit.get_data(),0.0,(U_2qbit.size()*2)*sizeof(double));
-    U_2qbit[0].real = std::cos(ThetaOver2);
-    U_2qbit[1].real = std::sin(ThetaOver2);
-    U_2qbit[1*4].real = -1.*std::sin(ThetaOver2);
-    U_2qbit[1*4+1].real = std::cos(ThetaOver2);
-    U_2qbit[2*4+2].real = std::cos(ThetaOver2);
-    U_2qbit[2*4+3].real = -1.*std::sin(ThetaOver2);
-    U_2qbit[3*4+2].real = std::sin(ThetaOver2);
-    U_2qbit[3*4+3].real = std::cos(ThetaOver2);
+    double invroottwo = 1./std::sqrt(2);
+    U_2qbit[0].real = invroottwo;
+    U_2qbit[1].real = invroottwo;
+    U_2qbit[1*4].real = -1.*invroottwo;
+    U_2qbit[1*4+1].real = invroottwo;
+    U_2qbit[2*4+2].real = invroottwo;
+    U_2qbit[2*4+3].real = -1*invroottwo;
+    U_2qbit[3*4+3].real = invroottwo;
+    U_2qbit[3*4+2].real = invroottwo;
     // apply the computing kernel on the matrix
-    if (parallel){
-      apply_2qbit_kernel_to_state_vector_input_AVX(U_2qbit,input,control_qbit,target_qbit,input.size());
-    }
-    else{
+    std::vector<int> involved_qbits = {control_qbit,target_qbit};
+    //apply_large_kernel_to_input(U_2qbit,input,involved_qbits,input.size());
+    if (input.cols<=1){
         apply_2qbit_kernel_to_state_vector_input(U_2qbit,input,control_qbit,target_qbit,input.size());
     }
+    else{
+        apply_2qbit_kernel_to_matrix_input(U_2qbit,input,control_qbit,target_qbit,input.size());
+    }
+
 
 }
 
 
 
 /**
-@brief Call to apply the gate on the input array/matrix by input*CRY
-@param parameters An array of parameters to calculate the matrix of the U3 gate.
+@brief Call to apply the gate on the input array/matrix by input*CNOT
 @param input The input array on which the gate is applied
 */
 void 
-CROT::apply_from_right( Matrix_real& parameters, Matrix& input ) {
-
-/*
-    if (input.cols != matrix_size ) {
-	std::stringstream sstream;
-	sstream << "Wrong matrix size in CRY apply_from_right" << std::endl;
-        print(sstream, 0);	
-        exit(-1);
-    }
-
-    double ThetaOver2, Phi, Lambda;
-
-    ThetaOver2 = parameters[0];
-    Phi = phi0;
-    Lambda = lambda0;
-
-    ThetaOver2 = theta0;
-    Phi = parameters[0];
-    Lambda = lambda0;
+CROT::apply_from_right( Matrix& input ) {
 
 
-Phi = Phi + M_PI;
-Phi = (1.0-std::cos(Phi/2))*M_PI;
-Phi = Phi - M_PI;
-
-//Phi = 0.5*(1.0-std::cos(Phi))*M_PI;
-
-
-    // get the U3 gate of one qubit
-    Matrix u3_1qbit = calc_one_qubit_u3(ThetaOver2, Phi, Lambda );
-
-    // apply the computing kernel on the matrix
-    apply_kernel_from_right(u3_1qbit, input); 
-    */
 
 }
 
 
+
+
 /**
-@brief Call to evaluate the derivate of the circuit on an inout with respect to all of the free parameters.
-@param parameters An array of the input parameters.
-@param input The input array on which the gate is applied
+@brief Call to set the number of qubits spanning the matrix of the gate
+@param qbit_num The number of qubits
 */
-std::vector<Matrix> 
-CROT::apply_derivate_to( Matrix_real& parameters_mtx, Matrix& input ) {
-
-    if (input.rows != matrix_size ) {
-	std::stringstream sstream;
-	sstream << "Wrong matrix size in CRY gate apply" << std::endl;
-        print(sstream, 0);	   
-        exit(-1);
-    }
-
-    std::vector<Matrix> ret;
-
-    double ThetaOver2;
-
-    ThetaOver2 = parameters_mtx[0]+M_PI/2;
-
-    // the resulting matrix
-    Matrix res_mtx = input.copy();   
-
-    Matrix U_2qbit(4,4);
-    memset(U_2qbit.get_data(),0.0,(U_2qbit.size()*2)*sizeof(double));
-    U_2qbit[0].real = std::cos(ThetaOver2);
-    U_2qbit[1].real = std::sin(ThetaOver2);
-    U_2qbit[1*4].real = -1.*std::sin(ThetaOver2);
-    U_2qbit[1*4+1].real = std::cos(ThetaOver2);
-    U_2qbit[2*4+2].real = std::cos(ThetaOver2);
-    U_2qbit[2*4+3].real = -1.*std::sin(ThetaOver2);
-    U_2qbit[3*4+2].real = std::sin(ThetaOver2);
-    U_2qbit[3*4+3].real = std::cos(ThetaOver2);
-    // apply the computing kernel on the matrix
-
-    apply_2qbit_kernel_to_state_vector_input(U_2qbit,res_mtx,control_qbit,target_qbit,input.size());
-
-
-    ret.push_back(res_mtx);
-    return ret;
-
+void CROT::set_qbit_num(int qbit_num) {
+        // setting the number of qubits
+        Gate::set_qbit_num(qbit_num);
 
 }
 
 
 
 /**
-@brief Call to set the final optimized parameters of the gate.
-@param ThetaOver2 Real parameter standing for the parameter theta.
-@param Phi Real parameter standing for the parameter phi.
-@param Lambda Real parameter standing for the parameter lambda.
+@brief Call to reorder the qubits in the matrix of the gate
+@param qbit_list The reordered list of qubits spanning the matrix
 */
-void CROT::set_optimized_parameters(double ThetaOver2 ) {
+void CROT::reorder_qubits( vector<int> qbit_list) {
 
-    parameters = Matrix_real(1, parameter_num);
-
-    parameters[0] = ThetaOver2;
+        Gate::reorder_qubits(qbit_list);
 
 }
-
-
-/**
-@brief Call to get the final optimized parameters of the gate.
-@param parameters_in Preallocated pointer to store the parameters ThetaOver2, Phi and Lambda of the U3 gate.
-*/
-Matrix_real CROT::get_optimized_parameters() {
-
-    return parameters.copy();
-
-}
-
-
 
 /**
 @brief Call to create a clone of the present class
@@ -257,12 +197,8 @@ Matrix_real CROT::get_optimized_parameters() {
 */
 CROT* CROT::clone() {
 
-    CROT* ret = new CROT(qbit_num, target_qbit, control_qbit);
-
-    if ( parameters.size() > 0 ) {
-        ret->set_optimized_parameters(parameters[0]);
-    }
-
+    CROT* ret = new CROT( qbit_num, target_qbit, control_qbit );
+    
     ret->set_parameter_start_idx( get_parameter_start_idx() );
 
     return ret;
@@ -270,23 +206,4 @@ CROT* CROT::clone() {
 }
 
 
-/**
-@brief Call to extract parameters from the parameter array corresponding to the circuit, in which the gate is embedded.
-@param parameters The parameter array corresponding to the circuit in which the gate is embedded
-@return Returns with the array of the extracted parameters.
-*/
-Matrix_real 
-CROT::extract_parameters( Matrix_real& parameters ) {
 
-    if ( get_parameter_start_idx() + get_parameter_num() > parameters.size()  ) {
-        std::string err("CROT::extract_parameters: Cant extract parameters, since the input array does't have enough elements.");
-        throw err;     
-    }
-
-    Matrix_real extracted_parameters(1,1);
-
-    extracted_parameters[0] = std::fmod( 2*parameters[ get_parameter_start_idx() ], 4*M_PI);
-
-    return extracted_parameters;
-
-}
