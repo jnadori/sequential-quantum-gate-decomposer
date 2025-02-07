@@ -51,18 +51,18 @@ inline __m256d complex_mult_AVX(__m256d input_vec, __m256d unitary_row_vec, __m2
 
 void apply_large_kernel_to_input_AVX(Matrix& unitary, Matrix& input, std::vector<int> involved_qbits, const int& matrix_size){
     if (input.cols==1){
-      switch((int)involved_qbits.size()){
-      case 2:{
+      //switch((int)involved_qbits.size()){
+      //case 2:{
               //apply_2qbit_kernel_to_state_vector_input_parallel_AVX(unitary,input,involved_qbits,matrix_size);
               apply_2qbit_kernel_to_state_vector_input_AVX(unitary, input, involved_qbits[0], involved_qbits[1], matrix_size);
-      }
-      case 3:{
-          apply_3qbit_kernel_to_state_vector_input_parallel_AVX(unitary,input,involved_qbits,matrix_size);
-      }
-      case 4:{
-              apply_4qbit_kernel_to_state_vector_input_parallel_AVX(unitary,input,involved_qbits,matrix_size);
-      }
-      }
+      //}
+      //case 3:{
+        //  apply_3qbit_kernel_to_state_vector_input_parallel_AVX(unitary,input,involved_qbits,matrix_size);
+      //}
+      //case 4:{
+       //       apply_4qbit_kernel_to_state_vector_input_parallel_AVX(unitary,input,involved_qbits,matrix_size);
+      //}
+      //}
   }
   else{
       apply_2qbit_kernel_to_matrix_input_AVX(unitary, input, involved_qbits[0], involved_qbits[1], matrix_size);
@@ -77,7 +77,7 @@ void apply_2qbit_kernel_to_state_vector_input_AVX(Matrix& two_qbit_unitary, Matr
     int index_step_inner = 1 << inner_qbit;
     int current_idx = 0;
     __m256d neg = _mm256_setr_pd(1.0, -1.0, 1.0, -1.0);
-    for (int current_idx_pair_outer=current_idx + index_step_outer; current_idx_pair_outer<matrix_size; current_idx_pair_outer=current_idx_pair_outer+(index_step_outer << 1)){
+    for (int current_idx_pair_outer=current_idx + index_step_outer; current_idx_pair_outer<input.rows; current_idx_pair_outer=current_idx_pair_outer+(index_step_outer << 1)){
     
         for (int current_idx_inner = 0; current_idx_inner < index_step_outer; current_idx_inner=current_idx_inner+(index_step_inner<<1)){
             if (inner_qbit==0){
@@ -230,7 +230,7 @@ void apply_2qbit_kernel_to_matrix_input_AVX(Matrix& two_qbit_unitary, Matrix& in
     int index_step_inner = 1 << inner_qbit;
     int current_idx = 0;
     __m256d neg = _mm256_setr_pd(1.0, -1.0, 1.0, -1.0);
-    for (int current_idx_pair_outer=current_idx + index_step_outer; current_idx_pair_outer<matrix_size; current_idx_pair_outer=current_idx_pair_outer+(index_step_outer << 1)){
+    for (int current_idx_pair_outer=current_idx + index_step_outer; current_idx_pair_outer<input.rows; current_idx_pair_outer=current_idx_pair_outer+(index_step_outer << 1)){
     
         for (int current_idx_inner = 0; current_idx_inner < index_step_outer; current_idx_inner=current_idx_inner+(index_step_inner<<1)){
             if (inner_qbit==0){

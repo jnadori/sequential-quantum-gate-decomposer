@@ -211,6 +211,12 @@ void NV_Decomposition::get_initial_circuit() {
     num_threads = openblas_get_num_threads();
     openblas_set_num_threads(1);
 #endif
+
+    if ( cost_fnc != HILBERT_SCHMIDT_TEST) {
+        std::string err("NV_Decomposition::start_decomposition: Only cost function HILBERT-SCHMIDT TEST is implemented for this strategy");
+        throw err;
+    }
+
     //measure the time for the decompositin
     tbb::tick_count start_time = tbb::tick_count::now();
 
@@ -268,6 +274,32 @@ void NV_Decomposition::get_initial_circuit() {
 	combine( gate_structure_loc );
 	delete( gate_structure_loc );
 	
+    decomposition_error = optimization_problem(optimized_parameters_mtx);
+    
+    // get the number of gates used in the decomposition
+    gates_num gates_num = get_gate_nums();
+    std::stringstream sstream2;
+    sstream2.str("");
+    sstream2 << "In the decomposition with error = " << decomposition_error << " were used " << layer_num << " gates with:" << std::endl;
+      
+        if ( gates_num.u3>0 ) sstream2 << gates_num.u3 << " U3 gates," << std::endl;
+        if ( gates_num.rx>0 ) sstream2 << gates_num.rx << " RX gates," << std::endl;
+        if ( gates_num.ry>0 ) sstream2 << gates_num.ry << " RY gates," << std::endl;
+        if ( gates_num.rz>0 ) sstream2 << gates_num.rz << " RZ gates," << std::endl;
+        if ( gates_num.cnot>0 ) sstream2 << gates_num.cnot << " CNOT gates," << std::endl;
+        if ( gates_num.crot>0 ) sstream2 << gates_num.crot << " CROT gates," << std::endl;
+        if ( gates_num.cz>0 ) sstream2 << gates_num.cz << " CZ gates," << std::endl;
+        if ( gates_num.ch>0 ) sstream2 << gates_num.ch << " CH gates," << std::endl;
+        if ( gates_num.x>0 ) sstream2 << gates_num.x << " X gates," << std::endl;
+        if ( gates_num.sx>0 ) sstream2 << gates_num.sx << " SX gates," << std::endl; 
+        if ( gates_num.syc>0 ) sstream2 << gates_num.syc << " Sycamore gates," << std::endl;   
+        if ( gates_num.un>0 ) sstream2 << gates_num.un << " UN gates," << std::endl;
+        if ( gates_num.cry>0 ) sstream2 << gates_num.cry << " CRY gates," << std::endl;  
+        if ( gates_num.adap>0 ) sstream2 << gates_num.adap << " Adaptive gates," << std::endl;
+    
+        sstream2 << std::endl;
+    	print(sstream2, 1);	  
+
 	
 #if BLAS==0 // undefined BLAS
     omp_set_num_threads(num_threads);
@@ -365,9 +397,6 @@ NV_Decomposition::optimize_imported_gate_structure(Matrix_real& optimized_parame
         optimization_tolerance_loc = 1.5*current_minimum < 1e-2 ? 1.5*current_minimum : 1e-2;
     }
 
-    sstream.str("");
-    sstream << "Continue with the compression of gate structure consisting of " << gate_structure_loc->get_gate_num() << " decomposing layers." << std::endl;
-    print(sstream, 1);	
     return gate_structure_loc;
 
 
@@ -722,7 +751,22 @@ NV_Decomposition::construct_nv_gate_layers() {
         }
     }
     else {  
+        // sequ
+        for (int target_qbit_loc = 0; target_qbit_loc<qbit_num; target_qbit_loc++) {
+            for (int control_qbit_loc = target_qbit_loc+1; control_qbit_loc<qbit_num; control_qbit_loc++) {
 
+                Gates_block* layer = new Gates_block( qbit_num );
+
+                layer->add_rz(target_qbit_loc);
+                layer->add_rx(target_qbit_loc);
+                layer->add_rz(target_qbit_loc);
+                layer->add_rz(control_qbit_loc);
+                layer->add_rx(control_qbit_loc);
+                layer->add_rz(control_qbit_loc);
+                layer->add_crot(target_qbit_loc, control_qbit_loc);
+                layers.push_back(layer);
+            }
+        }
     }
 
 /*
@@ -800,7 +844,7 @@ NV_Decomposition::add_finalyzing_layer( Gates_block* gate_structure ) {
             bool Phi = true;
             bool Lambda = true;
             block->add_rz(idx);
-            block->add_ry(idx);
+            block->add_rx(idx);
             block->add_rz(idx);
             //block->add_u3(idx, Theta, Phi, Lambda);
 //        block->add_ry(idx);
