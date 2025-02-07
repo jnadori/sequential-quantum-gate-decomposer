@@ -1756,13 +1756,9 @@ N_Qubit_Decomposition_adaptive::construct_adaptive_gate_layers() {
             bool Theta = true;
             bool Phi = true;
             bool Lambda = true;
-            layer->add_rz(target_qbit_loc);
-            layer->add_ry(target_qbit_loc);
-            layer->add_rz(target_qbit_loc);
-            layer->add_rz(control_qbit_loc);
-            layer->add_ry(control_qbit_loc);
-            layer->add_rz(control_qbit_loc);
-            layer->add_adaptive(target_qbit_loc, control_qbit_loc);
+            layer->add_u3(target_qbit_loc, Theta, Phi, Lambda);
+            layer->add_u3(control_qbit_loc, Theta, Phi, Lambda); 
+            layer->add_cnot(target_qbit_loc, control_qbit_loc);
 
             layers.push_back(layer);
 
@@ -1865,10 +1861,8 @@ N_Qubit_Decomposition_adaptive::add_finalyzing_layer( Gates_block* gate_structur
             bool Theta = true;
             bool Phi = true;
             bool Lambda = true;
-             //block->add_u3(idx, Theta, Phi, Lambda);
-        block->add_rz(idx);
-        block->add_ry(idx);
-        block->add_rz(idx); 
+            block->add_u3(idx, Theta, Phi, Lambda);
+
     }
 
 
