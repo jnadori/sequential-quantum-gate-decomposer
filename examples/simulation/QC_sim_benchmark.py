@@ -37,10 +37,10 @@ np.set_printoptions(linewidth=200)
 
 # number of qubits
 qbit_num_min = 2
-qbit_num_max = 10
+qbit_num_max = 5
 
 # number of levels
-levels = 10
+levels = 1
 
 random_initial_state = False
 
@@ -65,7 +65,7 @@ for qbit_num in range(qbit_num_min, qbit_num_max+1, 1):
 	else:
 		initial_state = np.zeros( (matrix_size,matrix_size), dtype=np.complex128 )
 		#initial_state[0] = 1.0 + 0j
-		initial_state += (1.0+0.j)*np.eye(matrix_size,matrix_size)/matrix_size
+		initial_state += (1.0+0.j)*np.eye(matrix_size,matrix_size)
 
 	initial_state_squander[ qbit_num ] = initial_state.copy()
 
@@ -80,15 +80,15 @@ for qbit_num in range(qbit_num_min, qbit_num_max+1, 1):
 		for control_qbit in range(qbit_num-1):
 			for target_qbit in range(control_qbit+1, qbit_num):
 
-				circuit_squander.add_U3(target_qbit, True, True, True )
-				circuit_squander.add_U3(control_qbit, True, True, True )
-				circuit_squander.add_CNOT( target_qbit=target_qbit, control_qbit=control_qbit )
+				#circuit_squander.add_U3(target_qbit, True, True, True )
+				#circuit_squander.add_U3(control_qbit, True, True, True )
+				circuit_squander.add_CROT( target_qbit=target_qbit, control_qbit=control_qbit )
 				#circuit_squander.add_CRY( target_qbit=target_qbit, control_qinitial_state.sizebit=control_qbit )
 				#gates_num = gates_num + 3
 
 	for target_qbit in range(qbit_num):
-		circuit_squander.add_U3(target_qbit, True, True, True )
-		gates_num = gates_num + 1
+		#circuit_squander.add_U3(target_qbit, True, True, True )
+		#gates_num = gates_num + 1
 		break		
 
 
@@ -105,8 +105,8 @@ for qbit_num in range(qbit_num_min, qbit_num_max+1, 1):
 	print( "Time elapsed SQUANDER: ", t_SQUANDER, " seconds at qbit_num = ", qbit_num, ' number of gates: ', gates_num )
 
 	execution_times_squander[ qbit_num ] = t_SQUANDER
-	#transformed_states_squander[ qbit_num ] = np.reshape(initial_state, (matrix_size,matrix_size) )
-	
+	transformed_states_squander[ qbit_num ] = np.reshape(initial_state, (matrix_size,matrix_size) )
+	#print(initial_state)
 	parameters_squander[ qbit_num ] = parameters
 
 
@@ -243,10 +243,10 @@ for qbit_num in range(qbit_num_min, qbit_num_max+1, 1):
 		for control_qbit in range(qbit_num-1):
 			for target_qbit in range(control_qbit+1, qbit_num):
 
-				circuit_qulacs.add_U3_gate(target_qbit, parameters[parameter_idx]*2, parameters[parameter_idx+1], parameters[parameter_idx+2] )
-				parameter_idx = parameter_idx+3
-				circuit_qulacs.add_U3_gate( control_qbit, parameters[parameter_idx]*2, parameters[parameter_idx+1], parameters[parameter_idx+2] )
-				parameter_idx = parameter_idx+3
+#				circuit_qulacs.add_U3_gate(target_qbit, parameters[parameter_idx]*2, parameters[parameter_idx+1], parameters[parameter_idx+2] )
+#				parameter_idx = parameter_idx+3
+#				circuit_qulacs.add_U3_gate( control_qbit, parameters[parameter_idx]*2, parameters[parameter_idx+1], parameters[parameter_idx+2] )
+#				parameter_idx = parameter_idx+3
 
 				circuit_qulacs.add_CNOT_gate( target_qbit,control_qbit)
 				
@@ -259,8 +259,8 @@ for qbit_num in range(qbit_num_min, qbit_num_max+1, 1):
 				
 
 	for target_qbit in range(qbit_num):
-		circuit_qulacs.add_U3_gate( target_qbit, parameters[parameter_idx]*2, parameters[parameter_idx+1], parameters[parameter_idx+2] )
-		parameter_idx = parameter_idx+3
+#		circuit_qulacs.add_U3_gate( target_qbit, parameters[parameter_idx]*2, parameters[parameter_idx+1], parameters[parameter_idx+2] )
+#		parameter_idx = parameter_idx+3
 		break
 		
 
@@ -284,11 +284,12 @@ print("Difference between the transformed state vectors:")
 keys = transformed_states_qulacs.keys()
 for qbit_num in keys:
 	state_squander = transformed_states_squander[ qbit_num ]
+	
 	#state_qiskit   = transformed_states_qiskit[ qbit_num ]
 	state_qulacs   = transformed_states_qulacs[ qbit_num ]
 	print( "Squander vs QISKIT: ", np.linalg.norm( state_squander-state_qulacs ) )
 	#print( "QISKIT vs Qulacs: ", np.linalg.norm( state_qiskit-state_qulacs ) )
-	#print(state_squander)
+	print(state_squander)
 	#print(state_qulacs)
 	
 

@@ -38,9 +38,8 @@ from scipy.stats import unitary_group
 from squander import utils
     
 ## load the unitary from file
-data = loadmat('Umtx.mat')
 ## The unitary to be decomposed  
-matrix_size=8
+matrix_size=32
 Umtx = unitary_group.rvs(matrix_size)
 ## [load Umtx]
 config = {      'agent_lifetime':200,
@@ -55,24 +54,30 @@ config = {      'agent_lifetime':200,
 
 # determine the size of the unitary to be decomposed
 matrix_size = len(Umtx)
-topology=[(0,1),(0,2)]
-
+topology=[(0,1)]
+import time 
 ## [create decomposition class]
 ## creating a class to decompose the unitary
-NVDecompose = NV_Decomposition( Umtx, level_limit_max=20, topology=topology  )
+Umtx = np.array([[1.+0.j,0.+0.j,0.+0.j,0.+0.j],[0.+0.j,0.+0.j,1.+0.j,0.+0.j],[0.+0.j,1.+0.j,0.+0.j,0.+0.j],[0.+0.j,0.+0.j,0.+0.j,1.+0.j]])
+NVDecompose = NV_Decomposition( Umtx, level_limit_max=200,level_limit_min=0,config=config,topology=topology  )
 NVDecompose.set_Optimizer("BFGS")
 NVDecompose.set_Verbose(3)
 NVDecompose.set_Cost_Function_Variant( 3 )
 ## [create decomposition class]
-print(NVDecompose.get_Decomposition_Error())
-
+#print(NVDecompose.get_Decomposition_Error())
+start = time.time()
 ## [start decomposition]
 # starting the decomposition
 NVDecompose.get_Initial_Circuit()
+print("CROT ANSATZ DECOMPOSITION TIME:",time.time()-start)
+quantum_circuit = NVDecompose.get_Qiskit_Circuit()
+print(quantum_circuit)
+print(dict(quantum_circuit.count_ops())['cry'])
 # list the decomposing operations
 ## [start decomposition]
 
-cDecompose = N_Qubit_Decomposition_adaptive( Umtx, level_limit_max=20, topology=topology )
+cDecompose = N_Qubit_Decomposition_adaptive( Umtx, level_limit_max=60 )
+"""
 cDecompose.set_Optimizer("BFGS")
 cDecompose.set_Verbose(3)
 cDecompose.set_Cost_Function_Variant( 3 )
@@ -81,6 +86,11 @@ cDecompose.set_Cost_Function_Variant( 3 )
 
 ## [start decomposition]
 # starting the decomposition
-#cDecompose.get_Initial_Circuit()
+cDecompose.Start_Decomposition()
 # list the decomposing operations
-print(cDecompose.get_Decomposition_Error())
+#print(cDecompose.get_Decomposition_Error())
+quantum_circuit = cDecompose.get_Qiskit_Circuit()
+
+print(quantum_circuit)
+print(cDecompose.get_Optimized_Parameters())
+"""

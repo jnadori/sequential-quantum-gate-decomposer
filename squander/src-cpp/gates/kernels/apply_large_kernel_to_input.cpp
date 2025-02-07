@@ -38,14 +38,14 @@ int get_grain_size(int index_step){
 void apply_large_kernel_to_input(Matrix& unitary, Matrix& input, std::vector<int> involved_qbits, const int& matrix_size){
 
     if (input.cols==1){
-    switch((int)involved_qbits.size()){
-    case 2:{
+    //switch((int)involved_qbits.size()){
+    //case 2:{
         apply_2qbit_kernel_to_state_vector_input(unitary, input, involved_qbits[0], involved_qbits[1], matrix_size);
-    }
+    /*}
     case 3:{
         apply_3qbit_kernel_to_state_vector_input(unitary,input,involved_qbits,matrix_size);
     }
-    }
+    }*/
     }
     else
     {
@@ -59,7 +59,7 @@ void apply_2qbit_kernel_to_state_vector_input(Matrix& two_qbit_unitary, Matrix& 
     int index_step_inner = 1 << inner_qbit;
     int current_idx = 0;
     
-    for (int current_idx_pair_outer=current_idx + index_step_outer; current_idx_pair_outer<matrix_size; current_idx_pair_outer=current_idx_pair_outer+(index_step_outer << 1)){
+    for (int current_idx_pair_outer=current_idx + index_step_outer; current_idx_pair_outer<input.rows; current_idx_pair_outer=current_idx_pair_outer+(index_step_outer << 1)){
     
         for (int current_idx_inner = 0; current_idx_inner < index_step_outer; current_idx_inner=current_idx_inner+(index_step_inner<<1)){
         
@@ -71,7 +71,7 @@ void apply_2qbit_kernel_to_state_vector_input(Matrix& two_qbit_unitary, Matrix& 
             int current_idx_outer_pair_loc = current_idx_pair_outer + idx + current_idx_inner;
 			int current_idx_inner_pair_loc = current_idx_pair_outer + idx + current_idx_inner + index_step_inner;
 			int indexes[4] = {current_idx_outer_loc,current_idx_inner_loc,current_idx_outer_pair_loc,current_idx_inner_pair_loc};
-            std::cout<<current_idx_outer_loc<<" "<<current_idx_inner_loc<<" "<<current_idx_outer_pair_loc<<" "<<current_idx_inner_pair_loc<<std::endl;
+            //std::cout<<current_idx_outer_loc<<" "<<current_idx_inner_loc<<" "<<current_idx_outer_pair_loc<<" "<<current_idx_inner_pair_loc<<std::endl;
 			
 			QGD_Complex16 element_outer = input[current_idx_outer_loc];
 			QGD_Complex16 element_outer_pair = input[current_idx_outer_pair_loc];
@@ -104,7 +104,7 @@ void apply_2qbit_kernel_to_matrix_input(Matrix& two_qbit_unitary, Matrix& input,
     int index_step_inner = 1 << inner_qbit;
     int current_idx = 0;
     
-    for (int current_idx_pair_outer=current_idx + index_step_outer; current_idx_pair_outer<matrix_size; current_idx_pair_outer=current_idx_pair_outer+(index_step_outer << 1)){
+    for (int current_idx_pair_outer=current_idx + index_step_outer; current_idx_pair_outer<input.rows; current_idx_pair_outer=current_idx_pair_outer+(index_step_outer << 1)){
     
         for (int current_idx_inner = 0; current_idx_inner < index_step_outer; current_idx_inner=current_idx_inner+(index_step_inner<<1)){
         
@@ -119,7 +119,6 @@ void apply_2qbit_kernel_to_matrix_input(Matrix& two_qbit_unitary, Matrix& input,
             int row_offset_outer_pair = current_idx_outer_pair_loc*input.stride;
             int row_offset_inner = current_idx_inner_loc*input.stride;
             int row_offset_inner_pair = current_idx_inner_pair_loc*input.stride;
-            std::cout<<input.rows<<" "<<input.cols<<std::endl;
 			//input.print_matrix();
             for ( int col_idx=0; col_idx<input.cols; col_idx++) {
                 int index_outer      = row_offset_outer+col_idx;
