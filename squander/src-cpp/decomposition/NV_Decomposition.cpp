@@ -752,8 +752,8 @@ NV_Decomposition::construct_nv_gate_layers() {
     }
     else {  
         // sequ
-        for (int target_qbit_loc = 0; target_qbit_loc<qbit_num; target_qbit_loc++) {
-            for (int control_qbit_loc = target_qbit_loc+1; control_qbit_loc<qbit_num; control_qbit_loc++) {
+        for (int control_qbit_loc = 0; control_qbit_loc<qbit_num; control_qbit_loc++) {
+            for (int target_qbit_loc = control_qbit_loc+1; target_qbit_loc<qbit_num; target_qbit_loc++) {
 
                 Gates_block* layer = new Gates_block( qbit_num );
 
@@ -763,7 +763,7 @@ NV_Decomposition::construct_nv_gate_layers() {
                 layer->add_rz(control_qbit_loc);
                 layer->add_rx(control_qbit_loc);
                 layer->add_rz(control_qbit_loc);
-                layer->add_crot(target_qbit_loc, control_qbit_loc);
+                layer->add_crot(target_qbit_loc,control_qbit_loc);
                 layers.push_back(layer);
             }
         }

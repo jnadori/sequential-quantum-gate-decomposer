@@ -118,6 +118,7 @@ Phi = Phi - M_PI;
     U_2qbit[2*4+3].real = -1*std::sin(ThetaOver2);
     U_2qbit[3*4+3].real = std::cos(ThetaOver2);
     U_2qbit[3*4+2].real = std::sin(ThetaOver2);
+    //U_2qbit[0].real =1.;U_2qbit[7].real =1.;U_2qbit[10].real =1.;U_2qbit[13].real =1.; 
     // apply the computing kernel on the matrix
     std::vector<int> involved_qbits = {control_qbit,target_qbit};
     if (parallel){
