@@ -36,62 +36,55 @@ import numpy as np
 from scipy.stats import unitary_group
 
 from squander import utils
+
+import qiskit
+qiskit_version = qiskit.version.get_version_info()
+
+from qiskit import QuantumCircuit
+from qiskit_aer import AerSimulator
     
-## load the unitary from file
-## The unitary to be decomposed  
-matrix_size=32
-Umtx = unitary_group.rvs(matrix_size)
-## [load Umtx]
+if qiskit_version[0] == '1':
+    from qiskit import transpile
+else :
+    from qiskit import execute
+Umtx=np.array([])
+qbit_num=4
+circuit_qiskit = QuantumCircuit(qbit_num)
+circuit_qiskit.h(0)
+circuit_qiskit.cx(0,1)
+circuit_qiskit.cx(0,2)
+circuit_qiskit.cx(0,3)
+
+circuit_qiskit.save_unitary()
+# Transpile for simulator
+simulator = AerSimulator(method = 'unitary')
+circ = transpile(circuit_qiskit, simulator)
+
+# Run and get unitary
+result = simulator.run(circ).result()
+Umtx = result.get_unitary(circ).to_matrix()
+
+print(circuit_qiskit)
 config = {      'agent_lifetime':200,
                 'max_inner_iterations_agent': 100000,
                 'max_inner_iterations_compression': 100000,
                 'max_inner_iterations' : 10000,
-                'max_inner_iterations_final': 10000, 		
+                'max_inner_iterations_final': 10000,
                 'Randomized_Radius': 0.3, 
                 'randomized_adaptive_layers': 1,
                 'optimization_tolerance_agent': 1e-3,
                 'optimization_tolerance_': 1e-8}
-
-# determine the size of the unitary to be decomposed
-matrix_size = len(Umtx)
-topology=[(0,1)]
-import time 
-## [create decomposition class]
-## creating a class to decompose the unitary
-Umtx = np.array([[1.+0.j,0.+0.j,0.+0.j,0.+0.j],[0.+0.j,0.+0.j,1.+0.j,0.+0.j],[0.+0.j,1.+0.j,0.+0.j,0.+0.j],[0.+0.j,0.+0.j,0.+0.j,1.+0.j]])
+topology = [(0,1),(0,2),(0,3)]
+print("COMPILING GHZ CIRCUIT")
 NVDecompose = NV_Decomposition( Umtx,config=config )
 NVDecompose.set_Optimizer("BFGS")
-NVDecompose.set_Verbose(3)
-NVDecompose.set_Cost_Function_Variant( 0 )
-## [create decomposition class]
-#print(NVDecompose.get_Decomposition_Error())
-start = time.time()
-## [start decomposition]
-# starting the decomposition
-NVDecompose.get_Initial_Circuit(3,topology)
+NVDecompose.set_Verbose(0)
+NVDecompose.set_Cost_Function_Variant( 8 )
+NVDecompose.get_Initial_Circuit(1,topology,True)
 NVDecompose.Start_Decomposition()
-print("CROT ANSATZ DECOMPOSITION TIME:",time.time()-start)
+parameters=NVDecompose.get_Optimized_Parameters()
+decomposition_error = NVDecompose.Optimization_Problem(parameters)
+print("Decomposition done with fidelity:" + str(1-decomposition_error))
+print("Compiled circuit:")
 quantum_circuit = NVDecompose.get_Qiskit_Circuit()
 print(quantum_circuit)
-print(dict(quantum_circuit.count_ops())['cry'])
-# list the decomposing operations
-## [start decomposition]
-
-cDecompose = N_Qubit_Decomposition_adaptive( Umtx, level_limit_max=60 )
-"""
-cDecompose.set_Optimizer("BFGS")
-cDecompose.set_Verbose(3)
-cDecompose.set_Cost_Function_Variant( 3 )
-## [create decomposition class]
-
-
-## [start decomposition]
-# starting the decomposition
-cDecompose.Start_Decomposition()
-# list the decomposing operations
-#print(cDecompose.get_Decomposition_Error())
-quantum_circuit = cDecompose.get_Qiskit_Circuit()
-
-print(quantum_circuit)
-print(cDecompose.get_Optimized_Parameters())
-"""
