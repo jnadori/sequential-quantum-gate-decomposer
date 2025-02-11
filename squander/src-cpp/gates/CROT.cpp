@@ -108,6 +108,7 @@ Phi = (1.0-std::cos(Phi/2))*M_PI;
 Phi = Phi - M_PI;
 */
 //Phi = 0.5*(1.0-std::cos(Phi))*M_PI;
+    if (input.cols==1){
     Matrix U_2qbit(4,4);
     memset(U_2qbit.get_data(),0.0,(U_2qbit.size()*2)*sizeof(double));
     U_2qbit[0].real = std::cos(ThetaOver2);
@@ -115,7 +116,7 @@ Phi = Phi - M_PI;
     U_2qbit[1*4+3].real = -1.*std::sin(ThetaOver2);
     U_2qbit[1*4+1].real = std::cos(ThetaOver2);
     U_2qbit[2*4+2].real = std::cos(ThetaOver2);
-    U_2qbit[2*4].real = -1*std::sin(ThetaOver2);
+    U_2qbit[2*4].real = -1.*std::sin(ThetaOver2);
     U_2qbit[3*4+3].real = std::cos(ThetaOver2);
     U_2qbit[3*4+1].real = std::sin(ThetaOver2);
     //U_2qbit[0].real =1.;U_2qbit[7].real =1.;U_2qbit[10].real =1.;U_2qbit[13].real =1.; 
@@ -127,6 +128,27 @@ Phi = Phi - M_PI;
     else{
         apply_large_kernel_to_input(U_2qbit,input,involved_qbits,input.size());
     }
+    }
+    else{
+      Matrix U3_matrix(2,2);
+      memset(U3_matrix.get_data(),0.0,(U3_matrix.size()*2)*sizeof(double));
+      U3_matrix[0].real=std::cos(ThetaOver2);
+      U3_matrix[3].real=std::cos(ThetaOver2);
+      U3_matrix[1].real=std::sin(ThetaOver2);
+      U3_matrix[2].real=-1.*std::sin(ThetaOver2);
+      Matrix U3_matrix2(2,2);
+      memset(U3_matrix2.get_data(),0.0,(U3_matrix.size()*2)*sizeof(double));
+      U3_matrix2[0].real=std::cos(ThetaOver2);
+      U3_matrix2[3].real=std::cos(ThetaOver2);
+      U3_matrix2[1].real=-1.*std::sin(ThetaOver2);
+      U3_matrix2[2].real=std::sin(ThetaOver2);
+      if(parallel){
+        apply_crot_kernel_to_matrix_input_AVX_parallel(U3_matrix2,U3_matrix, input, target_qbit, control_qbit, input.rows);
+      }
+      else{
+        apply_crot_kernel_to_matrix_input_AVX(U3_matrix2,U3_matrix, input, target_qbit, control_qbit, input.rows);
+      }
+      }
 
 
 }
@@ -171,20 +193,39 @@ CROT::apply_derivate_to( Matrix_real& parameters_mtx, Matrix& input ) {
     // the resulting matrix
     Matrix res_mtx = input.copy();   
 
+    if (input.cols==1){
     Matrix U_2qbit(4,4);
     memset(U_2qbit.get_data(),0.0,(U_2qbit.size()*2)*sizeof(double));
     U_2qbit[0].real = std::cos(ThetaOver2);
     U_2qbit[2].real = std::sin(ThetaOver2);
-    U_2qbit[1*4+3].real = -1.*std::sin(ThetaOver2);
+    U_2qbit[1*4+3].real = -1. *std::sin(ThetaOver2);
     U_2qbit[1*4+1].real = std::cos(ThetaOver2);
     U_2qbit[2*4+2].real = std::cos(ThetaOver2);
-    U_2qbit[2*4].real = -1*std::sin(ThetaOver2);
+    U_2qbit[2*4].real = -1. *std::sin(ThetaOver2);
     U_2qbit[3*4+3].real = std::cos(ThetaOver2);
     U_2qbit[3*4+1].real = std::sin(ThetaOver2);
     // apply the computing kernel on the matrix
     std::vector<int> involved_qbits = {control_qbit,target_qbit};
 
     apply_large_kernel_to_input(U_2qbit,res_mtx,involved_qbits,res_mtx.size());
+    
+    }
+    else{
+        Matrix U3_matrix(2,2);
+      memset(U3_matrix.get_data(),0.0,(U3_matrix.size()*2)*sizeof(double));
+      U3_matrix[0].real=std::cos(ThetaOver2);
+      U3_matrix[3].real=std::cos(ThetaOver2);
+      U3_matrix[1].real=std::sin(ThetaOver2);
+      U3_matrix[2].real=-1.*std::sin(ThetaOver2);
+      Matrix U3_matrix2(2,2);
+      memset(U3_matrix2.get_data(),0.0,(U3_matrix.size()*2)*sizeof(double));
+      U3_matrix2[0].real=std::cos(ThetaOver2);
+      U3_matrix2[3].real=std::cos(ThetaOver2);
+      U3_matrix2[1].real=-1.*std::sin(ThetaOver2);
+      U3_matrix2[2].real=std::sin(ThetaOver2);
+      apply_crot_kernel_to_matrix_input_AVX(U3_matrix2,U3_matrix, res_mtx, target_qbit, control_qbit, res_mtx.rows);
+      
+    }
     
     ret.push_back(res_mtx);
     return ret;

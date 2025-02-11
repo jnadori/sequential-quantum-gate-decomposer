@@ -363,7 +363,6 @@ list(APPEND qgd_files
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/decomposition/N_Qubit_Decomposition.cpp
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/decomposition/N_Qubit_Decomposition_adaptive.cpp
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/decomposition/N_Qubit_Decomposition_custom.cpp
-    ${PROJECT_SOURCE_DIR}/squander/src-cpp/decomposition/NV_Decomposition.cpp
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/decomposition/N_Qubit_Decomposition_Cost_Function.cpp
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/decomposition/Sub_Matrix_Decomposition_Cost_Function.cpp
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/decomposition/Sub_Matrix_Decomposition.cpp
