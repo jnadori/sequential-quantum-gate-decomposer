@@ -15,7 +15,7 @@ class qgd_NV_Decomposition(qgd_N_Qubit_Decomposition_custom_Wrapper):
 # @param optimize_layer_num Set true to optimize the minimum number of operation layers required in the decomposition, or false when the predefined maximal number of layer gates is used (ideal for general unitaries).
 # @param initial_guess String indicating the method to guess initial values for the optimalization. Possible values: "zeros" ,"random", "close_to_zero".
 # @return An instance of the class
-    def __init__( self, Umtx, initial_guess="RANDOM", config={}, accelerator_num=0 ):
+    def __init__( self, Umtx, initial_guess="RANDOM", config={}, accelerator_num=0):
         
         ## the number of qubits
         self.qbit_num = int(round( np.log2( len(Umtx) ) ))
@@ -29,7 +29,7 @@ class qgd_NV_Decomposition(qgd_N_Qubit_Decomposition_custom_Wrapper):
         super(qgd_NV_Decomposition, self).__init__(Umtx, self.qbit_num, initial_guess, config=config, accelerator_num=accelerator_num)
 
 
-    def get_Initial_Circuit(self, number_of_layers=1, topology=None):
+    def get_Initial_Circuit(self, number_of_layers=1, topology=None,final_layer=False ):
         circuit_squander = qgd_Circuit( self.qbit_num )
         if topology is not None:
             #add nv layers
@@ -55,10 +55,11 @@ class qgd_NV_Decomposition(qgd_N_Qubit_Decomposition_custom_Wrapper):
                         circuit_squander.add_RZ(control_qbit)
                         circuit_squander.add_CROT(target_qbit=target_qbit,control_qbit=control_qbit)
         #add finalizing layer
-        for qbit in range(self.qbit_num):
-            circuit_squander.add_RZ(qbit)
-            circuit_squander.add_RX(qbit)                
-            circuit_squander.add_RZ(qbit)
+        if final_layer:
+            for qbit in range(self.qbit_num):
+                circuit_squander.add_RZ(qbit)
+                circuit_squander.add_RX(qbit)                
+                circuit_squander.add_RZ(qbit)
         self.set_Gate_Structure(circuit_squander)
 
 ##
