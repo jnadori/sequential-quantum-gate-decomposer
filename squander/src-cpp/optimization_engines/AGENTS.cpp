@@ -828,7 +828,7 @@ exit(-1);
 
                     // test global convergence 
                     if ( agent_idx == 0 ) {
-                        export_current_cost_fnc(current_minimum);
+                        //export_current_cost_fnc(current_minimum);
                         current_minimum_mean = current_minimum_mean + (current_minimum - current_minimum_vec[ current_minimum_idx ])/current_minimum_vec.size();
                         current_minimum_vec[ current_minimum_idx ] = current_minimum;
                         current_minimum_idx = (current_minimum_idx + 1) % current_minimum_vec.size();
