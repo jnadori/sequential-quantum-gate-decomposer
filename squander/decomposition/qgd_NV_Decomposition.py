@@ -44,7 +44,7 @@ class qgd_NV_Decomposition(qgd_N_Qubit_Decomposition_custom_Wrapper):
                     circuit_squander.add_RZ(control_qbit)
                     circuit_squander.add_CROT(target_qbit=target_qbit,control_qbit=control_qbit)
         else:
-            for layer in number_of_layers:
+            for layer in range(number_of_layers):
                 for control_qbit in range(self.qbit_num-1):
                     for target_qbit in range(control_qbit+1,self.qbit_num):
                         circuit_squander.add_RZ(target_qbit)
