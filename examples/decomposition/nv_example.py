@@ -62,18 +62,18 @@ Umtx = np.array([[1.+0.j,0.+0.j,0.+0.j,0.+0.j],[0.+0.j,0.+0.j,1.+0.j,0.+0.j],[0.
 NVDecompose = NV_Decomposition( Umtx,config=config )
 NVDecompose.set_Optimizer("BFGS")
 NVDecompose.set_Verbose(3)
-NVDecompose.set_Cost_Function_Variant( 0 )
+NVDecompose.set_Cost_Function_Variant( 8 )
 ## [create decomposition class]
 #print(NVDecompose.get_Decomposition_Error())
 start = time.time()
 ## [start decomposition]
 # starting the decomposition
-NVDecompose.get_Initial_Circuit(3,topology)
+NVDecompose.get_Initial_Circuit(subtype="CONTROL_OPPOSITE",number_of_layers=3,topology=topology,final_layer=True)
 NVDecompose.Start_Decomposition()
 print("CROT ANSATZ DECOMPOSITION TIME:",time.time()-start)
 quantum_circuit = NVDecompose.get_Qiskit_Circuit()
 print(quantum_circuit)
-print(dict(quantum_circuit.count_ops())['cry'])
+#print(dict(quantum_circuit.count_ops())['cry'])
 # list the decomposing operations
 ## [start decomposition]
 

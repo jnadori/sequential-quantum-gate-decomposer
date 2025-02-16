@@ -27,7 +27,7 @@ limitations under the License.
 #include "common.h"
 #include "matrix_real.h"
 #include "Gate.h"
-
+#include "CROT.h"
 #ifdef __DFE__
 #include "common_DFE.h"
 #endif
@@ -255,7 +255,7 @@ void add_cnot_to_front( int target_qbit, int control_qbit );
 @param control_qbit The identification number of the control qubit. (0 <= target_qbit <= qbit_num-1)
 @param target_qbit The identification number of the target qubit. (0 <= target_qbit <= qbit_num-1)
 */
-void add_crot( int target_qbit, int control_qbit);
+void add_crot( int target_qbit, int control_qbit, crot_type subtype_in);
 
 
 
@@ -264,7 +264,7 @@ void add_crot( int target_qbit, int control_qbit);
 @param control_qbit The identification number of the control qubit. (0 <= target_qbit <= qbit_num-1)
 @param target_qbit The identification number of the target qubit. (0 <= target_qbit <= qbit_num-1)
 */
-void add_crot_to_front( int target_qbit, int control_qbit );
+void add_crot_to_front( int target_qbit, int control_qbit, crot_type subtype_in );
 
 /**
 @brief Append a CZ gate gate to the list of gates

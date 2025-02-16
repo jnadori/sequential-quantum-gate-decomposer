@@ -38,10 +38,10 @@ np.set_printoptions(linewidth=200)
 
 # number of qubits
 qbit_num_min = 2
-qbit_num_max = 8
+qbit_num_max = 2
 
 # number of levels
-levels = 10
+levels = 1
 
 random_initial_state = False
 
@@ -139,24 +139,28 @@ for qbit_num in range(qbit_num_min, qbit_num_max+1, 1):
 		for control_qbit in range(qbit_num-1):
 			for target_qbit in range(control_qbit+1, qbit_num):
 
-				circuit_squander.add_U3(target_qbit, True, True, True )
-				circuit_squander.add_U3(control_qbit, True, True, True )
-				circuit_squander.add_CROT( target_qbit=target_qbit, control_qbit=control_qbit )
+				#circuit_squander.add_U3(target_qbit, True, True, True )
+				#circuit_squander.add_U3(control_qbit, True, True, True )
+				circuit_squander.add_CROT( target_qbit=target_qbit, control_qbit=control_qbit,subtype="CONTROL_INDEPENDENT" )
 				#circuit_squander.ad_CRY( target_qbit=target_qbit, control_qinitial_state.sizebit=control_qbit )
 				#gates_num = gates_num + 3
 
 	for target_qbit in range(qbit_num):
-		circuit_squander.add_U3(target_qbit, True, True, True )
+		#circuit_squander.add_U3(target_qbit, True, True, True )
 		gates_num = gates_num + 1
 		break
 	# prepare circuit
 	#print( "Time elapsed qulacs: ", t_qulacs, " at qbit_num = ", qbit_num )
 	num_of_parameters = circuit_squander.get_Parameter_Num()
+	print(num_of_parameters)
 	#print("The number of free parameters at qubit_num= ", qbit_num, ": ", num_of_parameters )
 
 
-	parameters = np.zeros(num_of_parameters)+3*np.pi/4#np.random.rand(num_of_parameters)*2*np.pi
-
+	parameters = np.zeros(num_of_parameters)#np.random.rand(num_of_parameters)*2*np.pi
+	parameters[0] = np.pi/4
+	parameters[1] = np.pi/2
+	parameters[2] = -np.pi/4
+	parameters[3] = np.pi/2
 	t0 = time.time()
 	circuit_squander.apply_to( parameters, transformed_state )
 	t_qulacs = time.time()-t0
@@ -176,6 +180,7 @@ for qbit_num in keys:
 	
 	#state_qiskit   = transformed_states_qiskit[ qbit_num ]
 	state_qulacs   = transformed_states_qulacs[ qbit_num ]
+	print(state_qulacs)
 	print(np.trace(np.dot(state_squander,state_qulacs.conj().T)))
 	#print( "Squander vs QISKIT: ", np.linalg.norm( state_squander-state_qulacs ) )
 	#print( "QISKIT vs Qulacs: ", np.linalg.norm( state_qiskit-state_qulacs ) )
