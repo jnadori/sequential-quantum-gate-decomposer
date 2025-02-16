@@ -51,9 +51,9 @@ typedef struct {
 @param target_qbit The 0<=ID<qbit_num of the target qubit.
 */
 CROT* 
-create_CROT( int qbit_num, int target_qbit, int control_qbit ) {
+create_CROT( int qbit_num, int target_qbit, int control_qbit, crot_type subtype_in  ) {
 
-    return new CROT( qbit_num, target_qbit, control_qbit );
+    return new CROT( qbit_num, target_qbit, control_qbit, subtype_in );
 }
 
 
@@ -113,63 +113,38 @@ qgd_CROT_Wrapper_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 static int
 qgd_CROT_Wrapper_init(qgd_CROT_Wrapper *self, PyObject *args, PyObject *kwds)
 {
-    static char *kwlist[] = {(char*)"qbit_num", (char*)"target_qbit", (char*)"control_qbit", NULL};
+    static char *kwlist[] = {(char*)"qbit_num", (char*)"target_qbit", (char*)"control_qbit", (char*) "subtype",NULL};
     int  qbit_num = -1; 
     int target_qbit = -1;
     int control_qbit = -1;
+    PyObject* subtype_arg = NULL;
 
     if (PyArray_API == NULL) {
         import_array();
     }
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|iii", kwlist,
-                                     &qbit_num, &target_qbit, &control_qbit))
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|iiiO", kwlist,
+                                     &qbit_num, &target_qbit, &control_qbit,&subtype_arg))
         return -1;
-
+    PyObject* subtype_string = PyObject_Str(subtype_arg);
+    PyObject* subtype_string_unicode = PyUnicode_AsEncodedString(subtype_string, "utf-8", "~E~");
+    const char* subtype_C = PyBytes_AS_STRING(subtype_string_unicode);
+    crot_type qgd_subtype;
+    if ( strcmp("single", subtype_C) == 0 || strcmp("SINGLE", subtype_C) == 0) {
+        qgd_subtype = SINGLE;        
+    }
+    else if ( strcmp("control_opposite", subtype_C)==0 || strcmp("CONTROL_OPPOSITE", subtype_C)==0) {
+        qgd_subtype = CONTROL_OPPOSITE;        
+    }
+    else if ( strcmp("control_independent", subtype_C)==0 || strcmp("CONTROL_INDEPENDENT", subtype_C)==0) {
+        qgd_subtype = CONTROL_INDEPENDENT;        
+    }
     if (qbit_num != -1 && target_qbit != -1) {
-        self->gate = create_CROT( qbit_num, target_qbit, control_qbit );
+        self->gate = create_CROT( qbit_num, target_qbit, control_qbit,qgd_subtype );
     }
     return 0;
 }
 
-/**
-@brief Extract the optimized parameters
-@param start_index The index of the first inverse gate
-*/
-static PyObject *
-qgd_CROT_Wrapper_get_Matrix( qgd_CROT_Wrapper *self, PyObject *args ) {
-
-    PyArrayObject * parameters_arr = NULL;
-
-
-    // parsing input arguments
-    if (!PyArg_ParseTuple(args, "|O", &parameters_arr )) 
-        return Py_BuildValue("i", -1);
-
-    
-    if ( PyArray_IS_C_CONTIGUOUS(parameters_arr) ) {
-        Py_INCREF(parameters_arr);
-    }
-    else {
-        parameters_arr = (PyArrayObject*)PyArray_FROM_OTF( (PyObject*)parameters_arr, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
-    }
-
-
-    // get the C++ wrapper around the data
-    Matrix_real&& parameters_mtx = numpy2matrix_real( parameters_arr );
-
-    int parallel = 1;
-    Matrix CROT_mtx = self->gate->get_matrix( parameters_mtx, parallel );
-    
-    // convert to numpy array
-    CROT_mtx.set_owner(false);
-    PyObject *CROT_py = matrix_to_numpy( CROT_mtx );
-
-
-    Py_DECREF(parameters_arr);
-
-    return CROT_py;
-}
 
 
 
@@ -228,36 +203,6 @@ qgd_CROT_Wrapper_apply_to( qgd_CROT_Wrapper *self, PyObject *args ) {
     return Py_BuildValue("i", 0);
 }
 
-/**
-@brief Calculate the matrix of a U3 gate gate corresponding to the given parameters acting on a single qbit space.
-@param ThetaOver2 Real parameter standing for the parameter theta.
-@param Phi Real parameter standing for the parameter phi.
-@param Lambda Real parameter standing for the parameter lambda.
-@return Returns with the matrix of the one-qubit matrix.
-*/
-
-static PyObject *
-qgd_CROT_Wrapper_get_Gate_Kernel( qgd_CROT_Wrapper *self, PyObject *args ) {
-
-    double ThetaOver2;
-    double Phi; 
-    double Lambda; 
-
-    // parsing input arguments
-    if (!PyArg_ParseTuple(args, "|d", &ThetaOver2 )) 
-        return Py_BuildValue("i", -1);
-
-
-    // create QGD version of the input matrix
-
-    Matrix CROT_1qbit_ = self->gate->calc_one_qubit_u3(ThetaOver2, 0.0, 0.0 );
-    
-    PyObject *CROT_1qbit = matrix_to_numpy( CROT_1qbit_ );
-
-    return CROT_1qbit;
-
-
-}
 
 
 /**
@@ -377,14 +322,8 @@ static PyMemberDef qgd_CROT_Wrapper_members[] = {
 @brief Structure containing metadata about the methods of class qgd_CROT_Wrapper.
 */
 static PyMethodDef qgd_CROT_Wrapper_methods[] = {
-    {"get_Matrix", (PyCFunction) qgd_CROT_Wrapper_get_Matrix, METH_VARARGS,
-     "Method to get the matrix of the operation."
-    },
     {"apply_to", (PyCFunction) qgd_CROT_Wrapper_apply_to, METH_VARARGS,
      "Call to apply the gate on the input matrix."
-    },
-    {"get_Gate_Kernel", (PyCFunction) qgd_CROT_Wrapper_get_Gate_Kernel, METH_VARARGS,
-     "Call to calculate the gate matrix acting on a single qbit space."
     },
     {"get_Parameter_Num", (PyCFunction) qgd_CROT_Wrapper_get_Parameter_Num, METH_NOARGS,
      "Call to get the number of free parameters in the gate."

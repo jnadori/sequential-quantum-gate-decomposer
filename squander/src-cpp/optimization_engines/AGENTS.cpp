@@ -43,7 +43,7 @@ void Optimization_Interface::solve_layer_optimization_problem_AGENTS( int num_of
 
 
 
-        if ( ((cost_fnc != FROBENIUS_NORM) && (cost_fnc != HILBERT_SCHMIDT_TEST)) && cost_fnc != VQE  ) {
+        if ( (((cost_fnc != FROBENIUS_NORM) && (cost_fnc != HILBERT_SCHMIDT_TEST)) && cost_fnc != VQE  ) && (cost_fnc != INFIDELITY)) {
             std::string err("Optimization_Interface::solve_layer_optimization_problem_AGENTS: Only cost functions 0 and 3 are implemented");
             throw err;
         }

@@ -29,7 +29,7 @@ class qgd_NV_Decomposition(qgd_N_Qubit_Decomposition_custom_Wrapper):
         super(qgd_NV_Decomposition, self).__init__(Umtx, self.qbit_num, initial_guess, config=config, accelerator_num=accelerator_num)
 
 
-    def get_Initial_Circuit(self, number_of_layers=1, topology=None,final_layer=False ):
+    def get_Initial_Circuit(self,subtype="SINGLE", number_of_layers=1, topology=None,final_layer=False ):
         circuit_squander = qgd_Circuit( self.qbit_num )
         if topology is not None:
             #add nv layers
@@ -42,7 +42,7 @@ class qgd_NV_Decomposition(qgd_N_Qubit_Decomposition_custom_Wrapper):
                     circuit_squander.add_RZ(control_qbit)
                     circuit_squander.add_RX(control_qbit)                
                     circuit_squander.add_RZ(control_qbit)
-                    circuit_squander.add_CROT(target_qbit=target_qbit,control_qbit=control_qbit)
+                    circuit_squander.add_CROT(target_qbit=target_qbit,control_qbit=control_qbit,subtype=subtype)
         else:
             for layer in range(number_of_layers):
                 for control_qbit in range(self.qbit_num-1):
@@ -53,7 +53,7 @@ class qgd_NV_Decomposition(qgd_N_Qubit_Decomposition_custom_Wrapper):
                         circuit_squander.add_RZ(control_qbit)
                         circuit_squander.add_RX(control_qbit)                
                         circuit_squander.add_RZ(control_qbit)
-                        circuit_squander.add_CROT(target_qbit=target_qbit,control_qbit=control_qbit)
+                        circuit_squander.add_CROT(target_qbit=target_qbit,control_qbit=control_qbit,subtype=subtype)
         #add finalizing layer
         if final_layer:
             for qbit in range(self.qbit_num):

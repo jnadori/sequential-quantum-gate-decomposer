@@ -45,27 +45,11 @@ class qgd_CROT(qgd_CROT_Wrapper):
 #@param kwds A tuple of keywords
 # @return An instance of the class
 
-    def __init__( self, qbit_num, target_qbit, control_qbit ):
+    def __init__( self, qbit_num, target_qbit, control_qbit, subtype_in):
 
         # call the constructor of the wrapper class
-        super().__init__(qbit_num, target_qbit, control_qbit)
+        super().__init__(qbit_num, target_qbit, control_qbit, subtype_in)
 
-#@brief  Call to retrieve the gate matrix
-#@param self A pointer pointing to an instance of the class qgd_CROT. 
-#@param parameters_mtx An array of parameters to calculate the matrix.
-
-    def get_Matrix( self, parameters_mtx ):
-
-	# call the C wrapper function
-        return super().get_Matrix( parameters_mtx )
-
-#@brief Call to get the parameters of the matrices. 
-#@param self A pointer pointing to an instance of the class qgd_CROT.
-
-    def get_Gate_Kernel( self, ThetaOver2):
-
-	# call the C wrapper function
-        return super().calc_one_qubit_u3(ThetaOver2)
 
 #@brief Call to apply the gate operation on the input matrix
 #@param self A pointer pointing to an instance of the class qgd_CROT.

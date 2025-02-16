@@ -67,12 +67,12 @@ Umtx = result.get_unitary(circ).to_matrix()
 print(circuit_qiskit)
 config = {      'agent_lifetime':200,
                 'max_inner_iterations_agent': 100000,
-                'max_inner_iterations_compression': 100000,
+                'max_inner_iterations_compression': 10000,
                 'max_inner_iterations' : 10000,
                 'max_inner_iterations_final': 10000,
                 'Randomized_Radius': 0.3, 
                 'randomized_adaptive_layers': 1,
-                'optimization_tolerance_agent': 1e-3,
+                'optimization_tolerance_agent': 1e-8,
                 'optimization_tolerance_': 1e-8}
 topology = [(0,1),(0,2),(0,3)]
 print("COMPILING GHZ CIRCUIT")
@@ -80,11 +80,8 @@ NVDecompose = NV_Decomposition( Umtx,config=config )
 NVDecompose.set_Optimizer("BFGS")
 NVDecompose.set_Verbose(0)
 NVDecompose.set_Cost_Function_Variant( 8 )
-NVDecompose.get_Initial_Circuit(1,topology,True)
+NVDecompose.get_Initial_Circuit(subtype="CONTROL_OPPOSITE",number_of_layers=3,topology=topology,final_layer=True)
 NVDecompose.Start_Decomposition()
 parameters=NVDecompose.get_Optimized_Parameters()
 decomposition_error = NVDecompose.Optimization_Problem(parameters)
-print("Decomposition done with fidelity:" + str(1-decomposition_error))
-print("Compiled circuit:")
-quantum_circuit = NVDecompose.get_Qiskit_Circuit()
-print(quantum_circuit)
+print(1-decomposition_error)
