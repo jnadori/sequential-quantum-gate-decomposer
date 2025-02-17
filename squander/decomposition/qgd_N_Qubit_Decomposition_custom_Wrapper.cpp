@@ -1203,6 +1203,27 @@ qgd_N_Qubit_Decomposition_custom_Wrapper_set_Cost_Function_Variant( qgd_N_Qubit_
 
 }
 
+
+/**
+@brief Wrapper function to set a variant for the cost function. Input argument 0 stands for FROBENIUS_NORM, 1 for FROBENIUS_NORM_CORRECTION1, 2 for FROBENIUS_NORM_CORRECTION2, 3 for FROBENIUS_NORM_CORRECTION2_EXACT_DERIVATE
+@param self A pointer pointing to an instance of the class qgd_N_Qubit_Decomposition_adaptive_Wrapper.
+@return Returns with zero on success.
+*/
+static PyObject *
+qgd_N_Qubit_Decomposition_custom_Wrapper_get_Cost_Function_Variant( qgd_N_Qubit_Decomposition_custom_Wrapper *self)
+{
+
+    // The tuple of expected keywords
+    static char *kwlist[] = {(char*)"costfnc", NULL};
+
+    int costfnc = (int)self->decomp->get_cost_function_variant();
+
+
+
+    return Py_BuildValue("i", costfnc);
+
+}
+
 //////////////////////////////////////////////////////
 
 /**
@@ -1490,6 +1511,9 @@ static PyMethodDef qgd_N_Qubit_Decomposition_custom_Wrapper_methods[] = {
     },
     {"set_Cost_Function_Variant", (PyCFunction) qgd_N_Qubit_Decomposition_custom_Wrapper_set_Cost_Function_Variant, METH_VARARGS | METH_KEYWORDS,
      "Wrapper method to to set the variant of the cost function. Input argument 0 stands for FROBENIUS_NORM, 1 for FROBENIUS_NORM_CORRECTION1, 2 for FROBENIUS_NORM_CORRECTION2, 3 for HILBERT_SCHMIDT_TEST, 4 for HILBERT_SCHMIDT_TEST_CORRECTION1, 5 for HILBERT_SCHMIDT_TEST_CORRECTION2."
+    },
+    {"get_Cost_Function_Variant", (PyCFunction) qgd_N_Qubit_Decomposition_custom_Wrapper_get_Cost_Function_Variant, METH_NOARGS,
+     "Wrapper method to to get the variant of the cost function. Output 0 stands for FROBENIUS_NORM, 1 for FROBENIUS_NORM_CORRECTION1, 2 for FROBENIUS_NORM_CORRECTION2, 3 for HILBERT_SCHMIDT_TEST, 4 for HILBERT_SCHMIDT_TEST_CORRECTION1, 5 for HILBERT_SCHMIDT_TEST_CORRECTION2."
     },
     {"Optimization_Problem", (PyCFunction) qgd_N_Qubit_Decomposition_custom_Wrapper_Optimization_Problem, METH_VARARGS,
      "Wrapper function to evaluate the cost function."

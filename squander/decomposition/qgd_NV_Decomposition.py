@@ -246,8 +246,34 @@ class qgd_NV_Decomposition(qgd_N_Qubit_Decomposition_custom_Wrapper):
 ## 
 # @brief Call to set the optimizer used in the gate synthesis process
 # @param costfnc Variant of the cost function. Input argument 0 stands for FROBENIUS_NORM, 1 for FROBENIUS_NORM_CORRECTION1, 2 for FROBENIUS_NORM_CORRECTION2, 3 for HILBERT_SCHMIDT_TEST
-    def set_Cost_Function_Variant( self, costfnc=0 ):
+    def set_Cost_Function_Variant( self, costfnc=3 ):
 
         # Set the optimizer
-        super(qgd_NV_Decomposition, self).set_Cost_Function_Variant(costfnc=costfnc)         
+        super(qgd_NV_Decomposition, self).set_Cost_Function_Variant(costfnc=costfnc)   
+        
 
+## 
+# @brief Call to set the optimizer used in the gate synthesis process
+# @param costfnc Variant of the cost function. Input argument 0 stands for FROBENIUS_NORM, 1 for FROBENIUS_NORM_CORRECTION1, 2 for FROBENIUS_NORM_CORRECTION2, 3 for HILBERT_SCHMIDT_TEST
+    def get_Cost_Function_Variant( self ):
+
+        # Set the optimizer
+        return super(qgd_NV_Decomposition, self).get_Cost_Function_Variant()               
+    
+    def simulate_minimum_optimization_tolerance(self, samples, distr_mean, distr_std):
+        Identity = np.eye(2**self.qbit_num, dtype=np.complex128)
+        circuit = self.get_Circuit()
+        num_of_parameters = circuit.get_Parameter_Num()
+        parameters = np.random.rand(num_of_parameters)*2*np.pi
+        Unitary = Identity.copy()
+        circuit.apply_to(parameters,Unitary)
+        sum_cost_fnc = 0
+        for i in range(samples):
+            noisy_Umtx = Identity.copy()
+            noise = distr_mean + distr_std*np.random.randn(num_of_parameters)
+            circuit.apply_to(parameters+noise,noisy_Umtx)
+            if self.get_Cost_Function_Variant() == 3:
+                sum_cost_fnc += (1-1/(2**self.qbit_num*2**self.qbit_num)*np.abs(np.trace(np.dot(noisy_Umtx.conj().T,Unitary)))**2)
+            else:
+                sum_cost_fnc += (1-((np.abs(np.trace(np.dot(noisy_Umtx.conj().T,Unitary)))**2)/2**self.qbit_num+1)/(2**self.qbit_num+1))
+        return sum_cost_fnc/samples
