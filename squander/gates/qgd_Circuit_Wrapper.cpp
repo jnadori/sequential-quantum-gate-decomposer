@@ -779,20 +779,32 @@ qgd_Circuit_Wrapper_add_CROT(qgd_Circuit_Wrapper *self, PyObject *args, PyObject
 {
 
     // The tuple of expected keywords
-    static char *kwlist[] = {(char*)"target_qbit", (char*)"control_qbit", NULL};
+    static char *kwlist[] = {(char*)"target_qbit", (char*)"control_qbit",(char*)"crot_type", NULL};
 
     // initiate variables for input arguments
     int  target_qbit = -1; 
     int  control_qbit = -1; 
-
+    PyObject* subtype_arg = NULL;
     // parsing input arguments
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|ii", kwlist,
-                                     &target_qbit, &control_qbit))
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|iiO", kwlist,
+                                     &target_qbit, &control_qbit,&subtype_arg))
         return Py_BuildValue("i", -1);
-
+    PyObject* subtype_string = PyObject_Str(subtype_arg);
+    PyObject* subtype_string_unicode = PyUnicode_AsEncodedString(subtype_string, "utf-8", "~E~");
+    const char* subtype_C = PyBytes_AS_STRING(subtype_string_unicode);
+    crot_type qgd_subtype;
+    if ( strcmp("single", subtype_C) == 0 || strcmp("SINGLE", subtype_C) == 0) {
+        qgd_subtype = SINGLE;        
+    }
+    else if ( strcmp("control_opposite", subtype_C)==0 || strcmp("CONTROL_OPPOSITE", subtype_C)==0) {
+        qgd_subtype = CONTROL_OPPOSITE;        
+    }
+    else if ( strcmp("control_independent", subtype_C)==0 || strcmp("CONTROL_INDEPENDENT", subtype_C)==0) {
+        qgd_subtype = CONTROL_INDEPENDENT;        
+    }
     // adding U3 gate to the end of the gate structure
     if (target_qbit != -1 ) {
-        self->gate->add_crot(target_qbit, control_qbit);
+        self->gate->add_crot(target_qbit, control_qbit,qgd_subtype);
     }
 
     return Py_BuildValue("i", 0);

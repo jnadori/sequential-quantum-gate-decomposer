@@ -491,6 +491,21 @@ void Gates_block::get_parameter_max(Matrix_real &range_max) {
                     parameter_idx = parameter_idx - 3;
                 }
                 break; }
+            case CROT_OPERATION: {
+            CROT* crot_gate = static_cast<CROT*>(gate);
+            if ((crot_gate->get_subtype() == SINGLE) || (crot_gate->get_subtype() == CONTROL_OPPOSITE)){
+                    data[parameter_idx-2] = 4 * M_PI;
+                    data[parameter_idx-1] = 2 * M_PI;
+                    parameter_idx = parameter_idx - 2;
+            }
+            else if (crot_gate->get_subtype() == CONTROL_OPPOSITE){
+                    data[parameter_idx-4] = 4 * M_PI;
+                    data[parameter_idx-3] = 2 * M_PI;
+                    data[parameter_idx-2] = 4 * M_PI;
+                    data[parameter_idx-1] = 2 * M_PI;
+                    parameter_idx = parameter_idx - 4;
+            }
+            break;}
             case RX_OPERATION:
             case RY_OPERATION:
             case CRY_OPERATION:
@@ -857,10 +872,10 @@ void Gates_block::add_cry_to_front(int target_qbit, int control_qbit ) {
 @param target_qbit The identification number of the targt qubit. (0 <= target_qbit <= qbit_num-1)
 @param control_qbit The identification number of the control qubit. (0 <= target_qbit <= qbit_num-1)
 */
-void Gates_block::add_crot(int target_qbit, int control_qbit) {
+void Gates_block::add_crot(int target_qbit, int control_qbit, crot_type subtype_in) {
 
         // create the operation
-        Gate* operation = static_cast<Gate*>(new CROT( qbit_num, target_qbit, control_qbit));
+        Gate* operation = static_cast<Gate*>(new CROT( qbit_num, target_qbit, control_qbit, subtype_in));
 
         // adding the operation to the end of the list of gates
         add_gate( operation );
@@ -873,10 +888,10 @@ void Gates_block::add_crot(int target_qbit, int control_qbit) {
 @param target_qbit The identification number of the targt qubit. (0 <= target_qbit <= qbit_num-1)
 @param control_qbit The identification number of the control qubit. (0 <= target_qbit <= qbit_num-1)
 */
-void Gates_block::add_crot_to_front(int target_qbit, int control_qbit ) {
+void Gates_block::add_crot_to_front(int target_qbit, int control_qbit,crot_type subtype_in ) {
 
         // create the operation
-        Gate* gate = static_cast<Gate*>(new CROT( qbit_num, target_qbit, control_qbit ));
+        Gate* gate = static_cast<Gate*>(new CROT( qbit_num, target_qbit, control_qbit,subtype_in ));
 
         // adding the operation to the front of the list of gates
         add_gate_to_front( gate );
@@ -3478,7 +3493,6 @@ export_gate_list_to_binary(Matrix_real& parameters, Gates_block* gates_block, FI
 
 
             fwrite(parameters_data, sizeof(double), parameter_num, pFile);
-
             
         }
         else if (gt_type == RX_OPERATION || gt_type == RY_OPERATION || gt_type == RZ_OPERATION ) {

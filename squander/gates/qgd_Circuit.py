@@ -172,10 +172,10 @@ class qgd_Circuit(qgd_Circuit_Wrapper):
 #@param self A pointer pointing to an instance of the class qgd_Circuit.
 #@param Input arguments: target_qbit (int).
 
-    def add_CROT( self, target_qbit, control_qbit):
+    def add_CROT( self, target_qbit, control_qbit, subtype):
 
 	# call the C wrapper function
-        super(qgd_Circuit, self).add_CROT(target_qbit, control_qbit)
+        super(qgd_Circuit, self).add_CROT(target_qbit, control_qbit, subtype)
 
 #@brief Call to add adaptive gate to the front of the gate structure.
 #@param self A pointer pointing to an instance of the class qgd_Circuit.

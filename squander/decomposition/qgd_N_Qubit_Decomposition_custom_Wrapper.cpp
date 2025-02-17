@@ -365,6 +365,23 @@ get_gate( N_Qubit_Decomposition_custom* decomp, int &idx ) {
         Py_XDECREF(control_qbit);
 
     }
+    else if (gate->get_type() == CROT_OPERATION) {
+
+        // create gate parameters
+        PyObject* type = Py_BuildValue("s",  "CZ" );
+        PyObject* target_qbit = Py_BuildValue("i",  gate->get_target_qbit() );
+        PyObject* control_qbit = Py_BuildValue("i",  gate->get_control_qbit() );
+
+
+        PyDict_SetItemString(py_gate, "type", type );
+        PyDict_SetItemString(py_gate, "target_qbit", target_qbit );
+        PyDict_SetItemString(py_gate, "control_qbit", control_qbit );            
+
+        Py_XDECREF(type);
+        Py_XDECREF(target_qbit);
+        Py_XDECREF(control_qbit);
+
+    }
     else if (gate->get_type() == CH_OPERATION) {
 
         // create gate parameters
