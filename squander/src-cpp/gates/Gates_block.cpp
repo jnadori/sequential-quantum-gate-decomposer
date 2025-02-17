@@ -3493,7 +3493,6 @@ export_gate_list_to_binary(Matrix_real& parameters, Gates_block* gates_block, FI
 
 
             fwrite(parameters_data, sizeof(double), parameter_num, pFile);
-
             
         }
         else if (gt_type == RX_OPERATION || gt_type == RY_OPERATION || gt_type == RZ_OPERATION ) {

@@ -132,7 +132,7 @@ CROT::apply_to_list( Matrix_real& parameters_mtx, std::vector<Matrix>& input ) {
 @param parallel Set 0 for sequential execution, 1 for parallel execution with OpenMP and 2 for parallel with TBB (optional)
 */
 void 
-CROT::apply_to( Matrix_real& parameters, Matrix& input, int parallel ) {
+CROT::apply_to( Matrix_real& parameters_mtx, Matrix& input, int parallel ) {
 
 
     if (input.rows != matrix_size ) {
@@ -146,22 +146,22 @@ CROT::apply_to( Matrix_real& parameters, Matrix& input, int parallel ) {
     double Theta0Over2, Theta1Over2, Phi0, Phi1;
     
     if (subtype == SINGLE){
-       Theta0Over2 = parameters[0];
-       Theta1Over2 = parameters[0];
-       Phi0 = parameters[1];
-       Phi1 = parameters[1];
+       Theta0Over2 = parameters_mtx[0];
+       Theta1Over2 = parameters_mtx[0];
+       Phi0 = parameters_mtx[1];
+       Phi1 = parameters_mtx[1];
     }
     else if (subtype == CONTROL_OPPOSITE){
-       Theta0Over2 = parameters[0];
-       Theta1Over2 = -1.*parameters[0];
-       Phi0 = parameters[1];
-       Phi1 = parameters[1];
+       Theta0Over2 = parameters_mtx[0];
+       Theta1Over2 = -1.*parameters_mtx[0];
+       Phi0 = parameters_mtx[1];
+       Phi1 = parameters_mtx[1];
     }
     else if (subtype == CONTROL_INDEPENDENT){
-       Theta0Over2 = parameters[0];
-       Theta1Over2 = parameters[2];
-       Phi0 = parameters[1];
-       Phi1 = parameters[3];
+       Theta0Over2 = parameters_mtx[0];
+       Theta1Over2 = parameters_mtx[2];
+       Phi0 = parameters_mtx[1];
+       Phi1 = parameters_mtx[3];
     }
     else {
        Theta0Over2 = 0.0;
@@ -171,6 +171,30 @@ CROT::apply_to( Matrix_real& parameters, Matrix& input, int parallel ) {
     }
     
     if (input.cols==1){
+    
+    Matrix U_2qbit(4,4);
+    memset(U_2qbit.get_data(),0.0,(U_2qbit.size()*2)*sizeof(double));
+    U_2qbit[0].real = std::cos(Theta0Over2);
+    U_2qbit[2].real = std::sin(Theta0Over2)*std::sin(Phi0);
+    U_2qbit[2].imag = std::sin(Theta0Over2)*std::cos(Phi0);
+    U_2qbit[1*4+3].real = -1.*std::sin(Theta1Over2)*std::sin(Phi1);
+    U_2qbit[1*4+3].imag = -1.*std::sin(Theta1Over2)*std::cos(Phi1);
+    U_2qbit[1*4+1].real = std::cos(Theta1Over2);
+    U_2qbit[2*4+2].real = std::cos(Theta0Over2);
+    U_2qbit[2*4].real = -1.*std::sin(Theta0Over2)*std::sin(Phi0);
+    U_2qbit[2*4].imag = std::sin(Theta0Over2)*std::cos(Phi0);
+    U_2qbit[3*4+3].real = std::cos(Theta1Over2);
+    U_2qbit[3*4+1].real = std::sin(Theta1Over2)*std::sin(Phi1);
+    U_2qbit[3*4+1].imag = -1.*std::sin(Theta1Over2)*std::cos(Phi1);
+    //U_2qbit[0].real =1.;U_2qbit[7].real =1.;U_2qbit[10].real =1.;U_2qbit[13].real =1.; 
+    // apply the computing kernel on the matrix
+    std::vector<int> involved_qbits = {control_qbit,target_qbit};
+    if (parallel){
+      apply_large_kernel_to_input_AVX(U_2qbit,input,involved_qbits,input.size());
+    }
+    else{
+        apply_large_kernel_to_input(U_2qbit,input,involved_qbits,input.size());
+    }
     }
     else{
       Matrix U3_matrix = calc_one_qubit_rotation(Theta0Over2,Phi0);
@@ -251,7 +275,129 @@ CROT::apply_derivate_to( Matrix_real& parameters_mtx, Matrix& input ) {
 
 
     if (input.cols==1){
+     if (subtype == SINGLE || subtype == CONTROL_OPPOSITE){
+        double Theta0Over2_shifted = Theta0Over2 + M_PIOver2;
+        double Theta1Over2_shifted;
+      if (subtype == SINGLE){
+        Theta1Over2_shifted = Theta0Over2_shifted;
+      }
+      else{
+        Theta1Over2_shifted = -1.*Theta0Over2_shifted;
+      }
+    double Phi0_shifted = Phi0 + M_PIOver2;
+    double Phi1_shifted = Phi1 + M_PIOver2; 
     
+    //Theta derivative
+    Matrix res_mtx = input.copy();   
+    Matrix U_2qbit(4,4);
+    memset(U_2qbit.get_data(),0.0,(U_2qbit.size()*2)*sizeof(double));
+    
+    U_2qbit[0].real = std::cos(Theta0Over2_shifted);
+    U_2qbit[2].real = std::sin(Theta0Over2_shifted)*std::sin(Phi0);
+    U_2qbit[2].imag = std::sin(Theta0Over2_shifted)*std::cos(Phi0);
+    
+    U_2qbit[2*4+2].real = std::cos(Theta0Over2_shifted);
+    U_2qbit[2*4].real = -1.*std::sin(Theta0Over2_shifted)*std::sin(Phi0);
+    U_2qbit[2*4].imag = std::sin(Theta0Over2_shifted)*std::cos(Phi0);
+    
+    U_2qbit[1*4+3].real = -1.*std::sin(Theta1Over2_shifted)*std::sin(Phi1);
+    U_2qbit[1*4+3].imag = -1.*std::sin(Theta1Over2_shifted)*std::cos(Phi1);
+    U_2qbit[1*4+1].real = std::cos(Theta1Over2_shifted);
+    
+    U_2qbit[3*4+3].real = std::cos(Theta1Over2_shifted);
+    U_2qbit[3*4+1].real = std::sin(Theta1Over2_shifted)*std::sin(Phi1);
+    U_2qbit[3*4+1].imag = -1.*std::sin(Theta1Over2_shifted)*std::cos(Phi1);
+
+
+    std::vector<int> involved_qbits = {control_qbit,target_qbit};
+
+    apply_large_kernel_to_input(U_2qbit,res_mtx,involved_qbits,res_mtx.size());
+    ret.push_back(res_mtx);
+    
+    //Phi derivative
+    Matrix res_mtx1 = input.copy();   
+    memset(U_2qbit.get_data(),0.0,(U_2qbit.size()*2)*sizeof(double));
+
+    U_2qbit[2].real = std::sin(Theta0Over2)*std::sin(Phi0_shifted);
+    U_2qbit[2].imag = std::sin(Theta0Over2)*std::cos(Phi0_shifted);
+
+    U_2qbit[2*4].real = -1.*std::sin(Theta0Over2)*std::sin(Phi0_shifted);
+    U_2qbit[2*4].imag = std::sin(Theta0Over2)*std::cos(Phi0_shifted);
+    
+    U_2qbit[1*4+3].real = -1.*std::sin(Theta1Over2)*std::sin(Phi1_shifted);
+    U_2qbit[1*4+3].imag = -1.*std::sin(Theta1Over2)*std::cos(Phi1_shifted);
+
+    U_2qbit[3*4+1].real = std::sin(Theta1Over2)*std::sin(Phi1_shifted);
+    U_2qbit[3*4+1].imag = -1.*std::sin(Theta1Over2)*std::cos(Phi1_shifted);
+
+    apply_large_kernel_to_input(U_2qbit,res_mtx1,involved_qbits,res_mtx1.size());
+    ret.push_back(res_mtx1);
+
+    }
+    else{
+    double Theta0Over2_shifted = Theta0Over2 + M_PIOver2;
+    double Theta1Over2_shifted = Theta1Over2 + M_PIOver2;
+    double Phi0_shifted = Phi0 + M_PIOver2;
+    double Phi1_shifted = Phi1 + M_PIOver2; 
+    
+    //theta0 derivative
+    Matrix res_mtx = input.copy();   
+    Matrix U_2qbit(4,4);
+    memset(U_2qbit.get_data(),0.0,(U_2qbit.size()*2)*sizeof(double));
+    U_2qbit[0].real = std::cos(Theta0Over2_shifted);
+    U_2qbit[2].real = std::sin(Theta0Over2_shifted)*std::sin(Phi0);
+    U_2qbit[2].imag = std::sin(Theta0Over2_shifted)*std::cos(Phi0);
+    
+    U_2qbit[2*4+2].real = std::cos(Theta0Over2_shifted);
+    U_2qbit[2*4].real = -1.*std::sin(Theta0Over2_shifted)*std::sin(Phi0);
+    U_2qbit[2*4].imag = std::sin(Theta0Over2_shifted)*std::cos(Phi0);
+
+    std::vector<int> involved_qbits = {control_qbit,target_qbit};
+
+    apply_large_kernel_to_input(U_2qbit,res_mtx,involved_qbits,res_mtx.size());
+    ret.push_back(res_mtx);
+    
+    //Phi0 derivative
+    Matrix res_mtx1 = input.copy();   
+    memset(U_2qbit.get_data(),0.0,(U_2qbit.size()*2)*sizeof(double));
+
+    U_2qbit[2].real = std::sin(Theta0Over2)*std::sin(Phi0_shifted);
+    U_2qbit[2].imag = std::sin(Theta0Over2)*std::cos(Phi0_shifted);
+
+    U_2qbit[2*4].real = -1.*std::sin(Theta0Over2)*std::sin(Phi0_shifted);
+    U_2qbit[2*4].imag = std::sin(Theta0Over2)*std::cos(Phi0_shifted);
+
+    apply_large_kernel_to_input(U_2qbit,res_mtx1,involved_qbits,res_mtx1.size());
+    ret.push_back(res_mtx1);
+      
+    //theta1 derivative
+    Matrix res_mtx2 = input.copy();   
+    memset(U_2qbit.get_data(),0.0,(U_2qbit.size()*2)*sizeof(double));
+    
+    U_2qbit[1*4+3].real = -1.*std::sin(Theta1Over2_shifted)*std::sin(Phi1);
+    U_2qbit[1*4+3].imag = -1.*std::sin(Theta1Over2_shifted)*std::cos(Phi1);
+    U_2qbit[1*4+1].real = std::cos(Theta1Over2_shifted);
+    
+    U_2qbit[3*4+3].real = std::cos(Theta1Over2_shifted);
+    U_2qbit[3*4+1].real = std::sin(Theta1Over2_shifted)*std::sin(Phi1);
+    U_2qbit[3*4+1].imag = -1.*std::sin(Theta1Over2_shifted)*std::cos(Phi1);
+
+    apply_large_kernel_to_input(U_2qbit,res_mtx2,involved_qbits,res_mtx2.size());
+    ret.push_back(res_mtx2);
+    
+    //Phi1 derivative
+    Matrix res_mtx3 = input.copy();   
+    memset(U_2qbit.get_data(),0.0,(U_2qbit.size()*2)*sizeof(double));
+
+    U_2qbit[1*4+3].real = -1.*std::sin(Theta1Over2)*std::sin(Phi1_shifted);
+    U_2qbit[1*4+3].imag = -1.*std::sin(Theta1Over2)*std::cos(Phi1_shifted);
+
+    U_2qbit[3*4+1].real = std::sin(Theta1Over2)*std::sin(Phi1_shifted);
+    U_2qbit[3*4+1].imag = -1.*std::sin(Theta1Over2)*std::cos(Phi1_shifted);
+
+    apply_large_kernel_to_input(U_2qbit,res_mtx3,involved_qbits,res_mtx3.size());
+    ret.push_back(res_mtx3);
+    }
     }
     else{
      if (subtype == SINGLE || subtype == CONTROL_OPPOSITE){
