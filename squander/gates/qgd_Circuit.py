@@ -30,6 +30,22 @@ import numpy as np
 from os import path
 from squander.gates.qgd_Circuit_Wrapper import qgd_Circuit_Wrapper
 
+from squander.gates.qgd_U3 import qgd_U3 as U3
+from squander.gates.qgd_H import qgd_H  as H
+from squander.gates.qgd_X import qgd_X  as X
+from squander.gates.qgd_Y import qgd_Y  as Y
+from squander.gates.qgd_Z import qgd_Z  as Z 
+from squander.gates.qgd_CH import qgd_CH  as CH 
+from squander.gates.qgd_CNOT import qgd_CNOT  as CNOT
+from squander.gates.qgd_CZ import qgd_CZ  as CZ 
+from squander.gates.qgd_RX import qgd_RX  as RX 
+from squander.gates.qgd_RY import qgd_RY  as RY 
+from squander.gates.qgd_RZ import qgd_RZ  as RZ 
+from squander.gates.qgd_SX import qgd_SX  as SX 
+from squander.gates.qgd_SYC import qgd_SYC  as SYC 
+from squander.gates.qgd_CRY import qgd_CRY  as CRY 
+from squander.gates.qgd_CROT import qgd_CROT  as CROT 
+
 
 
 ##
@@ -287,6 +303,30 @@ class qgd_Circuit(qgd_Circuit_Wrapper):
 
 	# call the C wrapper function
         super().get_Parameter_Start_Index()
+        
+    def get_Gate_Nums(self):
+        number_of_gates = {}
+        gates = self.get_Gates()
+        for gate in gates:
+            if isinstance( gate, CNOT ):
+                # adding CNOT gate to the quantum circuit
+                if "CNOT" not in number_of_gates.keys():
+                    number_of_gates['CNOT'] = 1
+                else:
+                    number_of_gates['CNOT']+=1
+            elif isinstance( gate, CROT ):
+                # adding CNOT gate to the quantum circuit
+                if "CROT" not in number_of_gates.keys():
+                    number_of_gates['CROT'] = 1
+                else:
+                    number_of_gates['CROT']+=1
+            elif isinstance( gate, CRY ):
+                # adding CNOT gate to the quantum circuit
+                if "CRY" not in number_of_gates.keys():
+                    number_of_gates['CRY'] = 1
+                else:
+                    number_of_gates['CRY']+=1
+        return number_of_gates
 
 
 #@brief Method to get the list of parent gate indices. Then the parent gates can be obtained from the list of gates involved in the circuit.
