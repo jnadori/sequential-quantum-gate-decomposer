@@ -203,7 +203,7 @@ typedef struct {
     PyObject_HEAD
     /// Pointer to the C++ class of the SYC gate
     CROT* gate;
-} qgd_CROT;
+} qgd_CROT_Wrapper;
 
 /**
 @brief Type definition of the qgd_Operation_Block Python class of the qgd_Operation_Block module
@@ -1499,7 +1499,14 @@ get_gate( Gates_block* decomp, int &idx ) {
 
         // import gate operation modules
         PyObject* qgd_gate  = PyImport_ImportModule("squander.gates.qgd_CROT");
-
+        CROT* crot_gate = static_cast<CROT*>( gate->clone() );
+        crot_type qgd_subtype = crot_gate->get_subtype();
+        PyObject* subtype_pybytes;
+        if(qgd_subtype==SINGLE){subtype_pybytes = PyBytes_FromString("SINGLE");}
+        else if(qgd_subtype==CONTROL_OPPOSITE){subtype_pybytes = PyBytes_FromString("CONTROL_OPPOSITE");}
+        else if(qgd_subtype==CONTROL_INDEPENDENT){subtype_pybytes = PyBytes_FromString("CONTROL_INDEPENDENT");}
+        PyObject* subtype_string = PyObject_Str(subtype_pybytes);
+        
         if ( qgd_gate == NULL ) {
             PyErr_SetString(PyExc_Exception, "Module import error: squander.gates.qgd_CROT" );
             return NULL;
@@ -1509,32 +1516,7 @@ get_gate( Gates_block* decomp, int &idx ) {
         // PyDict_GetItemString creates a borrowed reference to the item in the dict. Reference counting is not increased on this element, dont need to decrease the reference counting at the end
         PyObject* py_gate_class = PyDict_GetItemString( qgd_gate_Dict, "qgd_CROT");
 
-        PyObject* gate_input = Py_BuildValue("(OOO)", qbit_num, target_qbit, control_qbit);
-        py_gate              = PyObject_CallObject(py_gate_class, gate_input);
-
-        // replace dummy data with real gate data
-        qgd_CH_Wrapper* py_gate_C = reinterpret_cast<qgd_CH_Wrapper*>( py_gate );
-        delete( py_gate_C->gate );
-        py_gate_C->gate = static_cast<CH*>( gate->clone() );
-
-        Py_DECREF( qgd_gate );                
-        Py_DECREF( gate_input );
-
-/*
-
-        // import gate operation modules
-        PyObject* qgd_gate  = PyImport_ImportModule("squander.gates.qgd_CROT");
-
-        if ( qgd_gate == NULL ) {
-            PyErr_SetString(PyExc_Exception, "Module import error: squander.gates.qgd_CROT" );
-            return NULL;
-        }
-
-        PyObject* qgd_gate_Dict  = PyModule_GetDict( qgd_gate );
-        // PyDict_GetItemString creates a borrowed reference to the item in the dict. Reference counting is not increased on this element, dont need to decrease the reference counting at the end
-        PyObject* py_gate_class = PyDict_GetItemString( qgd_gate_Dict, "qgd_CROT");
-
-        PyObject* gate_input = Py_BuildValue("(OOO)", qbit_num, target_qbit, control_qbit);
+        PyObject* gate_input = Py_BuildValue("(OOOO)", qbit_num, target_qbit, control_qbit,subtype_string);
         py_gate              = PyObject_CallObject(py_gate_class, gate_input);
 
         // replace dummy data with real gate data
@@ -1542,9 +1524,9 @@ get_gate( Gates_block* decomp, int &idx ) {
         delete( py_gate_C->gate );
         py_gate_C->gate = static_cast<CROT*>( gate->clone() );
 
-        Py_DECREF( qgd_gate );               
+        Py_DECREF( qgd_gate );                
         Py_DECREF( gate_input );
-*/
+
     }
     else if (gate->get_type() == RZ_OPERATION) {
 
