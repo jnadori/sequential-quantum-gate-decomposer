@@ -523,6 +523,13 @@ void Gates_block::get_parameter_max(Matrix_real &range_max) {
                     data[parameter_idx-1] = 2 * M_PI;
                     parameter_idx = parameter_idx - 4;
             }
+            else if (crot_gate->get_subtype() == CONTROL_BLOCK){
+
+                    data[parameter_idx-3] = 4 * M_PI;
+                    data[parameter_idx-2] = 2 * M_PI;
+                    data[parameter_idx-1] = 4 * M_PI;
+                    parameter_idx = parameter_idx - 3;
+            }
             break;}
             case RX_OPERATION:
             case RY_OPERATION:

@@ -36,48 +36,42 @@ import numpy as np
 from scipy.stats import unitary_group
 
 from squander import utils
+
+from scipy.optimize import minimize
     
 ## load the unitary from file
 ## The unitary to be decomposed  
-matrix_size=32
+qbit_num=3
+matrix_size=2**qbit_num
 Umtx = unitary_group.rvs(matrix_size)
-## [load Umtx]
-config = {      'agent_lifetime':200,
-                'max_inner_iterations_agent': 100000,
-                'max_inner_iterations_compression': 100000,
-                'max_inner_iterations' : 10000,
-                'max_inner_iterations_final': 10000, 		
-                'Randomized_Radius': 0.3, 
-                'randomized_adaptive_layers': 1,
-                'optimization_tolerance_agent': 1e-3,
-                'optimization_tolerance_': 1e-8}
-
-# determine the size of the unitary to be decomposed
-matrix_size = len(Umtx)
-topology=[(0,1)]
 import time 
 ## [create decomposition class]
 ## creating a class to decompose the unitary
-Umtx = np.array([[1.+0.j,0.+0.j,0.+0.j,0.+0.j],[0.+0.j,0.+0.j,1.+0.j,0.+0.j],[0.+0.j,1.+0.j,0.+0.j,0.+0.j],[0.+0.j,0.+0.j,0.+0.j,1.+0.j]])
+config = {      'agent_lifetime':200,
+                'max_inner_iterations_agent': 100000,
+                'max_inner_iterations_compression': 10000,
+                'max_inner_iterations' : 10000,
+                'max_inner_iterations_final': 10000,
+                'Randomized_Radius': 0.3, 
+                'randomized_adaptive_layers': 1,
+                'optimization_tolerance_agent': 1e-8,
+                'optimization_tolerance_': 1e-12}
+topology = [(0,1),(0,2),(1,2),(0,1),(0,2),(1,2),(0,1),(0,2)]
+print("COMPILING GHZ CIRCUIT")
 NVDecompose = NV_Decomposition( Umtx,config=config )
 NVDecompose.set_Optimizer("BFGS")
 NVDecompose.set_Verbose(3)
-NVDecompose.set_Cost_Function_Variant( 8 )
-## [create decomposition class]
-#print(NVDecompose.get_Decomposition_Error())
-start = time.time()
-## [start decomposition]
-# starting the decomposition
-NVDecompose.get_Initial_Circuit(subtype="CONTROL_OPPOSITE",number_of_layers=3,topology=topology,final_layer=True)
+NVDecompose.set_Cost_Function_Variant( 3 )
+NVDecompose.get_Initial_Circuit(subtype="CONTROL_INDEPENDENT",number_of_layers=1,topology=topology,final_layer=True)
+NVDecompose.set_Optimization_Tolerance( 1e-12 )
 NVDecompose.Start_Decomposition()
-print("CROT ANSATZ DECOMPOSITION TIME:",time.time()-start)
-quantum_circuit = NVDecompose.get_Qiskit_Circuit()
-print(quantum_circuit)
-#print(dict(quantum_circuit.count_ops())['cry'])
-# list the decomposing operations
-## [start decomposition]
-
-cDecompose = N_Qubit_Decomposition_adaptive( Umtx, level_limit_max=60 )
+parameters=NVDecompose.get_Optimized_Parameters()
+decomposition_error = NVDecompose.Optimization_Problem(parameters)
+print(1-decomposition_error)
+def fun(x):
+    return NVDecompose.Optimization_Problem(x)
+res = minimize(fun,parameters,method="Powell",tol=1e-10)
+print(NVDecompose.Optimization_Problem(res.x))
 """
 cDecompose.set_Optimizer("BFGS")
 cDecompose.set_Verbose(3)

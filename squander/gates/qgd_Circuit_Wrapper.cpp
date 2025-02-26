@@ -812,6 +812,9 @@ qgd_Circuit_Wrapper_add_CROT(qgd_Circuit_Wrapper *self, PyObject *args, PyObject
     else if ( strcmp("control_independent", subtype_C)==0 || strcmp("CONTROL_INDEPENDENT", subtype_C)==0) {
         qgd_subtype = CONTROL_INDEPENDENT;        
     }
+    else if ( strcmp("control_block", subtype_C)==0 || strcmp("CONTROL_BLOCK", subtype_C)==0) {
+        qgd_subtype = CONTROL_BLOCK;        
+    }
     // adding U3 gate to the end of the gate structure
     if (target_qbit != -1 ) {
         self->gate->add_crot(target_qbit, control_qbit,qgd_subtype);
@@ -1515,6 +1518,7 @@ get_gate( Gates_block* circuit, int &idx ) {
         if(qgd_subtype==SINGLE){subtype_pybytes = PyBytes_FromString("SINGLE");}
         else if(qgd_subtype==CONTROL_OPPOSITE){subtype_pybytes = PyBytes_FromString("CONTROL_OPPOSITE");}
         else if(qgd_subtype==CONTROL_INDEPENDENT){subtype_pybytes = PyBytes_FromString("CONTROL_INDEPENDENT");}
+        else if(qgd_subtype==CONTROL_BLOCK){subtype_pybytes = PyBytes_FromString("CONTROL_BLOCK");}
         PyObject* subtype_string = PyObject_Str(subtype_pybytes);
         
         if ( qgd_gate == NULL ) {

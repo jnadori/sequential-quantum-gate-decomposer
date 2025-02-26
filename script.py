@@ -16,47 +16,57 @@ from scipy.stats import unitary_group
 from squander import utils
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-decomposition_error=np.logspace(-1,-10,20)
-samples=100
-for N in range(2,3):
+decomposition_error=np.logspace(-1,-6,11)
+samples=50
+for N in range(5,6):
     print("############################################################")
     print("##########starting decomposition for "+str(N)+" qubits###############")
     print("############################################################")
     CROT_gates=np.zeros(shape=(decomposition_error.shape[0],samples))
-    minimum_layer = 0
+    layer_step=1
+    if N>3:
+        minimum_layer=7*(N-3)**2
+        layer_step=3*(N-3)
+    else:
+        minimum_layer = 0
     matrix_size = 2**N
     topology=[]
     for i in range(1,N):
         topology.append((0,i))
-    for decomp_tol_idx in range(decomposition_error.shape[0]):
-        decomp_tol = decomposition_error[decomp_tol_idx]
-        for n in tqdm(range(samples)):
-            Umtx = unitary_group.rvs(matrix_size)
-            NVDecompose = N_Qubit_Decomposition_adaptive( Umtx, level_limit_max=9**N,level_limit_min=minimum_layer,topology=topology )
-            NVDecompose.set_Optimizer("BFGS")
-            NVDecompose.set_Verbose(0)
-            NVDecompose.set_Cost_Function_Variant( 3 )
+    for n in tqdm(range(samples)):
+        Umtx = unitary_group.rvs(matrix_size)
+        NVDecompose = NV_Decomposition( Umtx )
+        NVDecompose.set_Optimizer("BFGS")
+        NVDecompose.set_Verbose(0)
+        NVDecompose.set_Cost_Function_Variant( 8 )
+        for decomp_tol_idx in range(decomposition_error.shape[0]):
+            decomp_tol = decomposition_error[decomp_tol_idx]
             NVDecompose.set_Optimization_Tolerance( decomp_tol )
-            NVDecompose.get_Initial_Circuit()
-            NVDecompose.Finalize_Circuit()
-            quantum_circuit = NVDecompose.get_Qiskit_Circuit()
-            count = dict(quantum_circuit.count_ops())
-            if "cx" not in count.keys() and "cry" not in count.keys():
-                CROT_gates[decomp_tol_idx][n] = 0
-            else:
-                CROT_gates[decomp_tol_idx][n] = 0
-                if "cx" in count.keys():
-                    CROT_gates[decomp_tol_idx][n] += dict(quantum_circuit.count_ops())['cx']
-                if "cry" in count.keys():
-                    CROT_gates[decomp_tol_idx][n] += dict(quantum_circuit.count_ops())['cry']
-            del NVDecompose
-        #minimum_layer = int(np.min(CROT_gates[decomp_tol_idx]))
-    np.savetxt(str("Decomp_"+str(N)+"_qbits_CNOT.txt"),CROT_gates)
-    y=np.mean(CROT_gates,axis=1)
-    yerr=np.std(CROT_gates,axis=1)
-    plt.errorbar(decomposition_error,y,yerr=yerr)
-    plt.xlabel("Decomposition Tolerance")
-    plt.ylabel("Number of CROT gates")
-    plt.title(str(N)+" qubit decomposition")
-    plt.xscale("log")
-    plt.savefig("Decomp_"+str(N)+"_qbits.png")
+            levels = minimum_layer
+            if decomp_tol_idx !=0:
+                parameters=NVDecompose.get_Optimized_Parameters()
+                decomposition_error_current = NVDecompose.Optimization_Problem(parameters)
+                if decomposition_error_current<decomp_tol:
+                    quantum_circuit = NVDecompose.get_Circuit()
+                    count = quantum_circuit.get_Gate_Nums()
+                    CROT_gates[decomp_tol_idx][n] = 0
+                    if "CROT" in count.keys():
+                        CROT_gates[decomp_tol_idx][n] += count['CROT']
+                    np.savetxt(str("Decomp_"+str(N)+"_qbits_CROT.txt"),CROT_gates)
+                    continue                
+            while (levels<N*100):
+                NVDecompose.get_Initial_Circuit("CONTROL_OPPOSITE",levels,topology,True)
+                circuit = NVDecompose.get_Circuit()
+                NVDecompose.set_Optimized_Parameters(np.zeros(circuit.get_Parameter_Num()))
+                NVDecompose.Start_Decomposition()
+                parameters=NVDecompose.get_Optimized_Parameters()
+                decomposition_error_current = NVDecompose.Optimization_Problem(parameters)
+                if decomposition_error_current<decomp_tol:
+                    quantum_circuit = NVDecompose.get_Circuit()
+                    count = quantum_circuit.get_Gate_Nums()
+                    CROT_gates[decomp_tol_idx][n] = 0
+                    if "CROT" in count.keys():
+                        CROT_gates[decomp_tol_idx][n] += count['CROT']
+                    np.savetxt(str("Decomp_"+str(N)+"_qbits_CROT.txt"),CROT_gates)
+                    break
+                levels += layer_step
