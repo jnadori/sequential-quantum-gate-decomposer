@@ -29,7 +29,7 @@ class qgd_NV_Decomposition(qgd_N_Qubit_Decomposition_custom_Wrapper):
         super(qgd_NV_Decomposition, self).__init__(Umtx, self.qbit_num, initial_guess, config=config, accelerator_num=accelerator_num)
 
 
-    def get_Initial_Circuit(self,subtype="SINGLE", number_of_layers=1, topology=None,final_layer=False ):
+    def get_Initial_Circuit(self,subtype="SINGLE", number_of_layers=1, topology=None,final_layer=True ):
         circuit_squander = qgd_Circuit( self.qbit_num )
         if subtype == "CONTROL_BLOCK":
             if topology is not None:
@@ -93,7 +93,32 @@ class qgd_NV_Decomposition(qgd_N_Qubit_Decomposition_custom_Wrapper):
                 circuit_squander.add_RX(qbit)                
                 circuit_squander.add_RZ(qbit)
         self.set_Gate_Structure(circuit_squander)
-
+    def get_multiple_qbit_crot_ansatz(self,topology=None,number_of_layers=1,final_layer=True):
+        circuit_squander = qgd_Circuit( self.qbit_num )
+        for layer in range(number_of_layers):
+            if topology is not None:
+                target_qbits=[]
+                for involved_qbits in topology:
+                    control_qbit,target_qbit = involved_qbits
+                    circuit_squander.add_CROT(target_qbit=target_qbit,control_qbit=control_qbit,subtype="CONTROL_INDEPENDENT")
+                    target_qbits.append(target_qbit)
+                circuit_squander.add_RY(0)
+                circuit_squander.add_RX(0)
+                for target_qbit in target_qbits:
+                    circuit_squander.add_RZ(target_qbit)
+            else:
+                for target_qbit in range(1,self.qbit_num):
+                    circuit_squander.add_CROT(target_qbit=target_qbit,control_qbit=0,subtype="CONTROL_INDEPENDENT")
+                circuit_squander.add_RY(0)
+                circuit_squander.add_RX(0)
+                for target_qbit in range(1,self.qbit_num):
+                    circuit_squander.add_RZ(target_qbit)
+        if final_layer:
+            for qbit in range(self.qbit_num):
+                circuit_squander.add_RZ(qbit)
+                circuit_squander.add_RX(qbit)                
+                circuit_squander.add_RZ(qbit)
+        self.set_Gate_Structure(circuit_squander)
 ##
 # @brief Wrapper function to call the start_decomposition method of C++ class N_Qubit_Decomposition
 # @param prepare_export Logical parameter. Set true to prepare the list of gates to be exported, or false otherwise.
