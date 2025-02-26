@@ -70,12 +70,9 @@ class qgd_NV_Decomposition(qgd_N_Qubit_Decomposition_custom_Wrapper):
                 for layer in range(number_of_layers):
                     for involved_qbits in topology:
                         control_qbit,target_qbit = involved_qbits
-                        circuit_squander.add_RZ(target_qbit)
-                        circuit_squander.add_RX(target_qbit)                
-                        circuit_squander.add_RZ(target_qbit)
-                        circuit_squander.add_RZ(control_qbit)
+                        circuit_squander.add_RX(target_qbit)
+                        circuit_squander.add_RY(control_qbit)
                         circuit_squander.add_RX(control_qbit)                
-                        circuit_squander.add_RZ(control_qbit)
                         circuit_squander.add_CROT(target_qbit=target_qbit,control_qbit=control_qbit,subtype=subtype)
             else:
                 for layer in range(number_of_layers):
@@ -103,7 +100,7 @@ class qgd_NV_Decomposition(qgd_N_Qubit_Decomposition_custom_Wrapper):
     def Start_Decomposition(self,prepare_export=True):
 
 	# call the C wrapper function
-        super(qgd_NV_Decomposition, self).Start_Decomposition(prepare_export=prepare_export)
+        super(qgd_NV_Decomposition, self).Start_Decomposition()
 
 
 ##
