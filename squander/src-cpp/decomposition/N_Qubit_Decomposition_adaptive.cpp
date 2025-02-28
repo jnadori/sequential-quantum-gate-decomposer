@@ -1246,11 +1246,11 @@ N_Qubit_Decomposition_adaptive::get_panelty( Gates_block* gate_structure, Matrix
             double parameter = optimized_parameters[parameter_idx];
             parameter_idx = parameter_idx + gate->get_parameter_num(); 
  
-            if ( gate->get_type() != ADAPTIVE_OPERATION ) {
+            if ( (gate->get_type() != ADAPTIVE_OPERATION) && (gate->get_type() != CROT_OPERATION)) {
                continue;
             }        
             
-        
+           if (gate->get_type() == ADAPTIVE_OPERATION){
             if ( std::abs(std::sin(parameter)) < 0.999 && std::abs(std::cos(parameter)) < 1e-3 ) {
                 // Condition of pure CNOT gate
                 panelty += 1;
@@ -1262,6 +1262,10 @@ N_Qubit_Decomposition_adaptive::get_panelty( Gates_block* gate_structure, Matrix
             else {
                 // Condition of controlled rotation gate
                 panelty += 2;
+            }
+            }
+            else{
+                panelty +=1;
             }
         
         }

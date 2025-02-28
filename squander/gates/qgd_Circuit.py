@@ -326,6 +326,30 @@ class qgd_Circuit(qgd_Circuit_Wrapper):
                     number_of_gates['CRY'] = 1
                 else:
                     number_of_gates['CRY']+=1
+            elif isinstance( gate, RY ):
+                # adding CNOT gate to the quantum circuit
+                if "RY" not in number_of_gates.keys():
+                    number_of_gates['RY'] = 1
+                else:
+                    number_of_gates['RY']+=1
+            elif isinstance( gate, RX ):
+                # adding CNOT gate to the quantum circuit
+                if "RX" not in number_of_gates.keys():
+                    number_of_gates['RX'] = 1
+                else:
+                    number_of_gates['RX']+=1
+            elif isinstance( gate, RZ ):
+                # adding CNOT gate to the quantum circuit
+                if "RZ" not in number_of_gates.keys():
+                    number_of_gates['RZ'] = 1
+                else:
+                    number_of_gates['RZ']+=1
+            elif isinstance( gate, U3 ):
+                # adding CNOT gate to the quantum circuit
+                if "U3" not in number_of_gates.keys():
+                    number_of_gates['U3'] = 1
+                else:
+                    number_of_gates['U3']+=1
         return number_of_gates
 
 
