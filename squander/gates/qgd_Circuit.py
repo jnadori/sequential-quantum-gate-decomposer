@@ -29,22 +29,22 @@ along with this program.  If not, see http://www.gnu.org/licenses/.
 import numpy as np
 from os import path
 from squander.gates.qgd_Circuit_Wrapper import qgd_Circuit_Wrapper
+from squander.gates.qgd_U3 import qgd_U3 
+from squander.gates.qgd_H import qgd_H 
+from squander.gates.qgd_X import qgd_X  
+from squander.gates.qgd_Y import qgd_Y  
+from squander.gates.qgd_Z import qgd_Z  
+from squander.gates.qgd_CH import qgd_CH   
+from squander.gates.qgd_CNOT import qgd_CNOT  
+from squander.gates.qgd_CZ import qgd_CZ  
+from squander.gates.qgd_RX import qgd_RX  
+from squander.gates.qgd_RY import qgd_RY  
+from squander.gates.qgd_RZ import qgd_RZ   
+from squander.gates.qgd_SX import qgd_SX  
+from squander.gates.qgd_SYC import qgd_SYC   
+from squander.gates.qgd_CRY import qgd_CRY 
+from squander.gates.qgd_CROT import qgd_CROT
 
-from squander.gates.qgd_U3 import qgd_U3 as U3
-from squander.gates.qgd_H import qgd_H  as H
-from squander.gates.qgd_X import qgd_X  as X
-from squander.gates.qgd_Y import qgd_Y  as Y
-from squander.gates.qgd_Z import qgd_Z  as Z 
-from squander.gates.qgd_CH import qgd_CH  as CH 
-from squander.gates.qgd_CNOT import qgd_CNOT  as CNOT
-from squander.gates.qgd_CZ import qgd_CZ  as CZ 
-from squander.gates.qgd_RX import qgd_RX  as RX 
-from squander.gates.qgd_RY import qgd_RY  as RY 
-from squander.gates.qgd_RZ import qgd_RZ  as RZ 
-from squander.gates.qgd_SX import qgd_SX  as SX 
-from squander.gates.qgd_SYC import qgd_SYC  as SYC 
-from squander.gates.qgd_CRY import qgd_CRY  as CRY 
-from squander.gates.qgd_CROT import qgd_CROT  as CROT 
 
 
 
@@ -60,7 +60,6 @@ class qgd_Circuit(qgd_Circuit_Wrapper):
 
     def __init__( self, qbit_num ):
 
-        self.qbit_num = qbit_num
         # call the constructor of the wrapper class
         super(qgd_Circuit, self).__init__( qbit_num )
 
@@ -184,15 +183,6 @@ class qgd_Circuit(qgd_Circuit_Wrapper):
 
 	# call the C wrapper function
         super(qgd_Circuit, self).add_SX(target_qbit)
-        
-#@brief Call to add a SX gate to the front of the gate structure.
-#@param self A pointer pointing to an instance of the class qgd_Circuit.
-#@param Input arguments: target_qbit (int).
-
-    def add_CROT( self, target_qbit, control_qbit, subtype):
-
-	# call the C wrapper function
-        super(qgd_Circuit, self).add_CROT(target_qbit, control_qbit, subtype)
 
 #@brief Call to add adaptive gate to the front of the gate structure.
 #@param self A pointer pointing to an instance of the class qgd_Circuit.
@@ -304,48 +294,62 @@ class qgd_Circuit(qgd_Circuit_Wrapper):
 
 	# call the C wrapper function
         super().get_Parameter_Start_Index()
+
+
+#@brief Method to get the list of parent gate indices. Then the parent gates can be obtained from the list of gates involved in the circuit.
+    def get_Parents( self, gate):
+
+	# call the C wrapper function
+        return super().get_Parents( gate )
+
+
+#@brief Method to get the list of child gate indices. Then the children gates can be obtained from the list of gates involved in the circuit.
+    def get_Children( self, gate):
+
+	# call the C wrapper function
+        return super().get_Children( gate )
         
     def get_Gate_Nums(self):
         number_of_gates = {}
         gates = self.get_Gates()
         for gate in gates:
-            if isinstance( gate, CNOT ):
+            if isinstance( gate, qgd_CNOT ):
                 # adding CNOT gate to the quantum circuit
                 if "CNOT" not in number_of_gates.keys():
                     number_of_gates['CNOT'] = 1
                 else:
                     number_of_gates['CNOT']+=1
-            elif isinstance( gate, CROT ):
+            elif isinstance( gate, qgd_CROT ):
                 # adding CNOT gate to the quantum circuit
                 if "CROT" not in number_of_gates.keys():
                     number_of_gates['CROT'] = 1
                 else:
                     number_of_gates['CROT']+=1
-            elif isinstance( gate, CRY ):
+            elif isinstance( gate, qgd_CRY ):
                 # adding CNOT gate to the quantum circuit
                 if "CRY" not in number_of_gates.keys():
                     number_of_gates['CRY'] = 1
                 else:
                     number_of_gates['CRY']+=1
-            elif isinstance( gate, RY ):
+            elif isinstance( gate, qgd_RY ):
                 # adding CNOT gate to the quantum circuit
                 if "RY" not in number_of_gates.keys():
                     number_of_gates['RY'] = 1
                 else:
                     number_of_gates['RY']+=1
-            elif isinstance( gate, RX ):
+            elif isinstance( gate, qgd_RX ):
                 # adding CNOT gate to the quantum circuit
                 if "RX" not in number_of_gates.keys():
                     number_of_gates['RX'] = 1
                 else:
                     number_of_gates['RX']+=1
-            elif isinstance( gate, RZ ):
+            elif isinstance( gate, qgd_RZ ):
                 # adding CNOT gate to the quantum circuit
                 if "RZ" not in number_of_gates.keys():
                     number_of_gates['RZ'] = 1
                 else:
                     number_of_gates['RZ']+=1
-            elif isinstance( gate, U3 ):
+            elif isinstance( gate, qgd_U3 ):
                 # adding CNOT gate to the quantum circuit
                 if "U3" not in number_of_gates.keys():
                     number_of_gates['U3'] = 1
@@ -371,7 +375,7 @@ class qgd_Circuit(qgd_Circuit_Wrapper):
                     target_qbit = gates[gate_idx].get_Target_Qbit()
                     control_qbit = gates[gate_idx].get_Control_Qbit()
                     gate = gates[gate_idx]
-                    if isinstance( gate, CROT ):
+                    if isinstance( gate, qgd_CROT ):
                         if ((control_qbit in involved_qbits) and control_last_single[control_qbit]==False) and (target_qbit not in involved_qbits):
                             involved_qbits.append(target_qbit)
                             used_gates_idx.append(gate_idx)
@@ -409,18 +413,3 @@ class qgd_Circuit(qgd_Circuit_Wrapper):
                 gate_idx+=1
             gate_groups.append(gate_group)
         return depth
-
-
-#@brief Method to get the list of parent gate indices. Then the parent gates can be obtained from the list of gates involved in the circuit.
-    def get_Parents( self, gate):
-
-	# call the C wrapper function
-        return super().get_Parents( gate )
-
-
-#@brief Method to get the list of child gate indices. Then the children gates can be obtained from the list of gates involved in the circuit.
-    def get_Children( self, gate):
-
-	# call the C wrapper function
-        return super().get_Children( gate )
-
