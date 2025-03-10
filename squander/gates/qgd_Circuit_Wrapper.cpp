@@ -817,7 +817,7 @@ qgd_Circuit_Wrapper_add_CROT(qgd_Circuit_Wrapper *self, PyObject *args, PyObject
     }
     // adding U3 gate to the end of the gate structure
     if (target_qbit != -1 ) {
-        self->gate->add_crot(target_qbit, control_qbit,qgd_subtype);
+        self->circuit->add_crot(target_qbit, control_qbit,qgd_subtype);
     }
 
     return Py_BuildValue("i", 0);
