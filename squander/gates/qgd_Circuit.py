@@ -308,7 +308,11 @@ class qgd_Circuit(qgd_Circuit_Wrapper):
 
 	# call the C wrapper function
         return super().get_Children( gate )
-        
+#@brief Method to get the list of parent gate indices. Then the parent gates can be obtained from the list of gates involved in the circuit.
+    def reorder_qubits( self, qbit_order):
+
+	# call the C wrapper function
+        super().reorder_qubits( qbit_order )
     def get_Gate_Nums(self):
         number_of_gates = {}
         gates = self.get_Gates()

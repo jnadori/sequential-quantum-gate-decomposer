@@ -2033,7 +2033,49 @@ qgd_Circuit_Wrapper_get_Flat_Circuit( qgd_Circuit_Wrapper *self ) {
 }
 
 
- 
+ /**
+@brief Call to apply the gate operation on the inut matrix
+*/
+static PyObject *
+qgd_Circuit_Wrapper_reorder_qubits( qgd_Circuit_Wrapper *self, PyObject *args ) {
+
+
+    PyObject *qbit_order = NULL;
+    // parsing input arguments
+    if (!PyArg_ParseTuple(args, "|O", &qbit_order )) 
+        return Py_BuildValue("i", -1);
+
+      // create C++ variant of the list
+    std::vector<int> qbit_order_Cpp;
+
+    // elaborate connectivity topology
+    bool is_None = qbit_order == Py_None;
+    bool is_list = PyList_Check(qbit_order);
+
+    // Check whether input is a list
+    if (!is_list && !is_None) {
+        printf("Input topology must be a list!\n");
+        return -1;
+    }
+
+    // get the number of qbubits
+    Py_ssize_t element_num = PyList_GET_SIZE(qbit_order);
+
+    for ( Py_ssize_t idx=0; idx<element_num; idx++ ) {
+    
+        PyObject *item = PyList_GetItem(qbit_order, idx );
+
+
+        int qbit_new = (int) PyLong_AsLong( item );
+
+
+        qbit_order_Cpp.push_back( qbit_new );        
+    }
+    
+    self->circuit->reorder_qubits(qbit_order_Cpp);
+    return Py_BuildValue("i", 0);
+}
+
 
 
 /**
@@ -2134,6 +2176,9 @@ static PyMethodDef qgd_Circuit_Wrapper_Methods[] = {
      "Call to get the number of qubits in the circuit"
     },
     {"get_Gate", (PyCFunction) qgd_Circuit_Wrapper_get_gate, METH_VARARGS,
+     "Method to get the i-th decomposing gates."
+    },
+    {"reorder_qubits", (PyCFunction) qgd_Circuit_Wrapper_reorder_qubits, METH_VARARGS,
      "Method to get the i-th decomposing gates."
     },
     {"get_Gates", (PyCFunction) qgd_Circuit_Wrapper_get_gates, METH_NOARGS,
