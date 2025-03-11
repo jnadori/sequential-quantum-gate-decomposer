@@ -46,7 +46,8 @@ class qgd_CROT(qgd_CROT_Wrapper):
 # @return An instance of the class
 
     def __init__( self, qbit_num, target_qbit, control_qbit, subtype_in):
-
+        self.type = "CROT"
+        self.subtype = subtype_in
         # call the constructor of the wrapper class
         super().__init__(qbit_num, target_qbit, control_qbit, subtype_in)
 

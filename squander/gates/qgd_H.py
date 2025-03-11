@@ -35,7 +35,6 @@ from .qgd_H_Wrapper import qgd_H_Wrapper
 # @brief A QGD Python interface class for the qgd_H.
 class qgd_H(qgd_H_Wrapper):
     
-    
 ## 
 # @brief Constructor of the class.
 #@param self A pointer pointing to an instance of the class qgd_H.
@@ -45,7 +44,7 @@ class qgd_H(qgd_H_Wrapper):
 # @return An instance of the class
 
     def __init__( self, qbit_num, target_qbit ):
-
+        self.type = "H" 
         # call the constructor of the wrapper class
         super().__init__(qbit_num, target_qbit)
 

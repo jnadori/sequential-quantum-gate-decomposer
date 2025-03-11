@@ -46,7 +46,10 @@ class qgd_U3(qgd_U3_Wrapper):
 # @return An instance of the class
 
     def __init__( self, qbit_num, target_qbit, Theta=True, Phi=True, Lambda=True ):
-
+        self.type = "U3"
+        self.Theta = Theta
+        self.Phi = Phi
+        self.Lambda = Lambda
         # initiate variables for input arguments
         #int  qbit_num = -1; 
         # call the constructor of the wrapper class

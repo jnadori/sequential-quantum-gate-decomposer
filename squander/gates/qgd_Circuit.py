@@ -59,7 +59,7 @@ class qgd_Circuit(qgd_Circuit_Wrapper):
 # @return An instance of the class
 
     def __init__( self, qbit_num ):
-
+        self.qbit_num = qbit_num
         # call the constructor of the wrapper class
         super(qgd_Circuit, self).__init__( qbit_num )
 
@@ -192,6 +192,15 @@ class qgd_Circuit(qgd_Circuit_Wrapper):
 
 	# call the C wrapper function
         super(qgd_Circuit, self).add_adaptive(target_qbit, control_qbit)
+        
+#@brief Call to add a SX gate to the front of the gate structure.
+#@param self A pointer pointing to an instance of the class qgd_Circuit.
+#@param Input arguments: target_qbit (int).
+
+    def add_CROT( self, target_qbit, control_qbit, subtype):
+
+	# call the C wrapper function
+        super(qgd_Circuit, self).add_CROT(target_qbit, control_qbit, subtype)
 
 #@brief Call to add adaptive gate to the front of the gate structure.
 #@param self A pointer pointing to an instance of the class qgd_Circuit.
@@ -313,6 +322,7 @@ class qgd_Circuit(qgd_Circuit_Wrapper):
 
 	# call the C wrapper function
         super().reorder_qubits( qbit_order )
+        
     def get_Gate_Nums(self):
         number_of_gates = {}
         gates = self.get_Gates()
@@ -417,3 +427,34 @@ class qgd_Circuit(qgd_Circuit_Wrapper):
                 gate_idx+=1
             gate_groups.append(gate_group)
         return depth
+        
+    def add_Gate(self,qgd_gate):
+        gate_type = qgd_gate.type
+        if gate_type == "H":
+            self.add_H(qgd_gate.get_Target_Qbit())
+        elif gate_type == "X":
+            self.add_X(qgd_gate.get_Target_Qbit())
+        elif gate_type == "Y":
+            self.add_Y(qgd_gate.get_Target_Qbit())
+        elif gate_type == "Z":
+            self.add_Z(qgd_gate.get_Target_Qbit())
+        elif gate_type == "CH":
+            self.add_CH(qgd_gate.get_Target_Qbit(),qgd_gate.get_Control_Qbit())
+        elif gate_type == "CZ":
+            self.add_CZ(qgd_gate.get_Target_Qbit(),qgd_gate.get_Control_Qbit())
+        elif gate_type == "RX":
+            self.add_RX(qgd_gate.get_Target_Qbit())
+        elif gate_type == "RY":
+            self.add_RY(qgd_gate.get_Target_Qbit())
+        elif gate_type == "RZ":
+            self.add_RZ(qgd_gate.get_Target_Qbit())
+        elif gate_type == "SX":
+            self.add_SX(qgd_gate.get_Target_Qbit())
+        elif gate_type == "U3":
+            self.add_U3(qgd_gate.get_Target_Qbit(),qgd_gate.Theta,qgd_gate.Phi,qgd_gate.Lambda)
+        elif gate_type == "CRY":
+            self.add_CRY(qgd_gate.get_Target_Qbit(),qgd_gate.get_Control_Qbit())
+        elif gate_type == "CNOT":
+            self.add_CNOT(qgd_gate.get_Target_Qbit(),qgd_gate.get_Control_Qbit())
+        elif gate_type == "CROT":
+            self.add_CROT(qgd_gate.get_Target_Qbit(),qgd_gate.get_Control_Qbit(),qgd_gate.subtype)
