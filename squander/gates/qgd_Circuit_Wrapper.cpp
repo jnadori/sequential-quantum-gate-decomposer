@@ -2076,7 +2076,48 @@ qgd_Circuit_Wrapper_reorder_qubits( qgd_Circuit_Wrapper *self, PyObject *args ) 
     return Py_BuildValue("i", 0);
 }
 
+ /**
+@brief Call to apply the gate operation on the inut matrix
+*/
+static PyObject *
+qgd_Circuit_Wrapper_map_qubits( qgd_Circuit_Wrapper *self, PyObject *args ) {
 
+
+    PyObject *qbit_map = NULL;
+    // parsing input arguments
+    if (!PyArg_ParseTuple(args, "|O", &qbit_map )) 
+        return Py_BuildValue("i", -1);
+
+      // create C++ variant of the list
+    std::vector<int> qbit_map_Cpp;
+
+    // elaborate connectivity topology
+    bool is_None = qbit_map == Py_None;
+    bool is_list = PyList_Check(qbit_map);
+
+    // Check whether input is a list
+    if (!is_list && !is_None) {
+        printf("Input topology must be a list!\n");
+        return -1;
+    }
+
+    // get the number of qbubits
+    Py_ssize_t element_num = PyList_GET_SIZE(qbit_map);
+
+    for ( Py_ssize_t idx=0; idx<element_num; idx++ ) {
+    
+        PyObject *item = PyList_GetItem(qbit_map, idx );
+
+
+        int qbit_new = (int) PyLong_AsLong( item );
+
+
+        qbit_map_Cpp.push_back( qbit_new );        
+    }
+    
+    self->circuit->map_qubits(qbit_map_Cpp);
+    return Py_BuildValue("i", 0);
+}
 
 /**
 @brief Call to get the starting index of the parameters in the parameter array corresponding to the circuit in which the current gate is incorporated
@@ -2179,6 +2220,9 @@ static PyMethodDef qgd_Circuit_Wrapper_Methods[] = {
      "Method to get the i-th decomposing gates."
     },
     {"reorder_qubits", (PyCFunction) qgd_Circuit_Wrapper_reorder_qubits, METH_VARARGS,
+     "Method to get the i-th decomposing gates."
+    },
+    {"map_qubits", (PyCFunction) qgd_Circuit_Wrapper_map_qubits, METH_VARARGS,
      "Method to get the i-th decomposing gates."
     },
     {"get_Gates", (PyCFunction) qgd_Circuit_Wrapper_get_gates, METH_NOARGS,

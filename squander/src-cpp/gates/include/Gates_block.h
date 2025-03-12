@@ -501,6 +501,11 @@ void list_gates( const Matrix_real &parameters, int start_index );
 */
 virtual void reorder_qubits( std::vector<int> qbit_list );
 
+/**
+@brief Call to map the qubits in the matrix of the operation
+@param qbit_list The map list of qubits spanning the matrix
+*/
+virtual void map_qubits( std::vector<int> qbit_map);
 
 /**
 @brief Call to get the qubits involved in the gates stored in the block of gates.
