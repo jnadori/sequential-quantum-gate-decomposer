@@ -50,7 +50,7 @@ N_Qubit_Decomposition_adaptive::N_Qubit_Decomposition_adaptive() : Optimization_
     // set the level limit
     level_limit = 0;
 
-
+    custom_layers = false;
 
     // BFGS is better for smaller problems, while ADAM for larger ones
     if ( qbit_num <= 5 ) {
@@ -111,6 +111,7 @@ N_Qubit_Decomposition_adaptive::N_Qubit_Decomposition_adaptive( Matrix Umtx_in, 
     // Boolean variable to determine whether randomized adaptive layers are used or not
     randomized_adaptive_layers = false;
 
+    custom_layers = false;
 
 }
 
@@ -726,7 +727,15 @@ N_Qubit_Decomposition_adaptive::determine_initial_gate_structure(Matrix_real& op
         optimization_tolerance_loc = optimization_tolerance;
     }         
         
-    
+    int max_outer_iterations_loc;
+    double value_placeholder;
+    if ( config.count("max_outer_iterations") > 0 ) {
+        config["max_outer_iterations"].get_property( value_placeholder );
+        max_outer_iterations_loc = (int) value_placeholder;
+    }
+    else {
+        max_outer_iterations_loc = max_outer_iterations;
+    }
 
 
     int level = level_limit_min;
@@ -740,8 +749,12 @@ N_Qubit_Decomposition_adaptive::determine_initial_gate_structure(Matrix_real& op
         for (int idx=0; idx<level; idx++) {
 
             // create the new decomposing layer and add to the gate staructure
+            if (custom_layers){
+                add_custom_layers(gate_structure_loc); 
+            }
+            else{
             add_adaptive_layers( gate_structure_loc );
-
+            }
         }
            
         // add finalyzing layer to the top of the gate structure
@@ -767,10 +780,10 @@ N_Qubit_Decomposition_adaptive::determine_initial_gate_structure(Matrix_real& op
 #endif
 */
                 // solve the optimization problem in isolated optimization process
-                cDecomp_custom_random = N_Qubit_Decomposition_custom( Umtx.copy(), qbit_num, false, config, RANDOM, accelerator_num);
+                cDecomp_custom_random = N_Qubit_Decomposition_custom( Umtx.copy(), qbit_num, false, config, CLOSE_TO_ZERO, accelerator_num);
                 cDecomp_custom_random.set_custom_gate_structure( gate_structure_loc );
                 cDecomp_custom_random.set_optimization_blocks( gate_structure_loc->get_gate_num() );
-                cDecomp_custom_random.set_max_iteration( max_outer_iterations );
+                cDecomp_custom_random.set_max_iteration( max_outer_iterations_loc );
 #ifndef __DFE__
                 cDecomp_custom_random.set_verbose(verbose);
 #else
@@ -1720,6 +1733,29 @@ N_Qubit_Decomposition_adaptive::add_adaptive_layers( Gates_block* gate_structure
 
 }
 
+/**
+@brief Call to add adaptive layers to the gate structure stored by the class.
+*/
+void 
+N_Qubit_Decomposition_adaptive::add_custom_layers() {
+
+    add_custom_layers( this );
+
+}
+
+/**
+@brief Call to add adaptive layers to the gate structure.
+*/
+void 
+N_Qubit_Decomposition_adaptive::add_custom_layers( Gates_block* gate_structure ) {
+
+
+    // create the new decomposing layer and add to the gate staructure
+    Gates_block* layer = custom_layer_template->clone();
+    gate_structure->combine( layer );
+
+
+}
 
 
 
@@ -2022,6 +2058,18 @@ N_Qubit_Decomposition_adaptive::add_layer_to_imported_gate_structure() {
 
 }
 
+/**
+@brief Call to set custom layers to the gate structure that are intended to be used in the subdecomposition.
+@param filename
+*/
+void 
+N_Qubit_Decomposition_adaptive::set_custom_layer_template( Gates_block* custom_layer_template_in ) {
+
+    custom_layer_template = custom_layer_template_in->clone();
+ 
+    custom_layers = true;
+
+}
 
 
 

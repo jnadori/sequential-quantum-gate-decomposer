@@ -912,6 +912,43 @@ qgd_N_Qubit_Decomposition_adaptive_Wrapper_set_Gate_Structure( qgd_N_Qubit_Decom
 }
 
 
+/**
+@brief Wrapper function to set custom gate structure for the decomposition.
+@param self A pointer pointing to an instance of the class qgd_N_Qubit_Decomposition_adaptive_Wrapper.
+@return Returns with zero on success.
+*/
+static PyObject *
+qgd_N_Qubit_Decomposition_adaptive_Wrapper_set_Custom_Layer_Template( qgd_N_Qubit_Decomposition_adaptive_Wrapper *self, PyObject *args ) {
+
+    // initiate variables for input arguments
+    PyObject* gate_structure_py; 
+
+    // parsing input arguments
+    if (!PyArg_ParseTuple(args, "|O", &gate_structure_py )) return Py_BuildValue("i", -1);
+
+
+    // convert gate structure from PyObject to qgd_Circuit_Wrapper
+    qgd_Circuit_Wrapper* qgd_op_block = (qgd_Circuit_Wrapper*) gate_structure_py;
+
+    try {
+        self->decomp->set_custom_layer_template( qgd_op_block->gate );
+    }
+    catch (std::string err ) {
+        PyErr_SetString(PyExc_Exception, err.c_str());
+        return NULL;
+    }
+    catch(...) {
+        std::string err( "Invalid pointer to decomposition class");
+        PyErr_SetString(PyExc_Exception, err.c_str());
+        return NULL;
+    }
+    
+
+    return Py_BuildValue("i", 0);
+
+
+}
+
 
 /**
 @brief Wrapper function to append custom layers to the gate structure that are intended to be used in the decomposition.
@@ -2116,6 +2153,9 @@ static PyMethodDef qgd_N_Qubit_Decomposition_adaptive_Wrapper_methods[] = {
      "Set the debugfile name of the N_Qubit_Decomposition class."
     },
     {"set_Gate_Structure", (PyCFunction) qgd_N_Qubit_Decomposition_adaptive_Wrapper_set_Gate_Structure, METH_VARARGS,
+     "Call to set adaptive custom gate structure in the decomposition."
+    },
+    {"set_Custom_Layer_Template", (PyCFunction) qgd_N_Qubit_Decomposition_adaptive_Wrapper_set_Custom_Layer_Template, METH_VARARGS,
      "Call to set adaptive custom gate structure in the decomposition."
     },
     {"Reorder_Qubits", (PyCFunction) qgd_N_Qubit_Decomposition_adaptive_Wrapper_Reorder_Qubits, METH_VARARGS,
