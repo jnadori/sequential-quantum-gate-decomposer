@@ -423,6 +423,7 @@ class qgd_Circuit(qgd_Circuit_Wrapper):
                             elif (gate_start_idx == gate_start_idx_prev):
                                 gate_start_idx=gate_idx
                         else:
+                            control_last_single[target_qbit]=True
                             if target_qbit not in involved_qbits:
                                 involved_qbits.append(target_qbit)
                                 used_gates_idx.append(gate_idx)

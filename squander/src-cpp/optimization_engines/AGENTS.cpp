@@ -843,7 +843,7 @@ exit(-1);
                         if ( std::abs( current_minimum_mean - current_minimum) < 1e-7  && var_current_minimum < 1e-7 ) {
                             std::stringstream sstream;
                             sstream << "AGENTS, iterations converged to "<< current_minimum << std::endl;
-                            print(sstream, 0); 
+                            print(sstream, 3); 
                             terminate_optimization = true;
                         }                    
 
@@ -857,7 +857,7 @@ exit(-1);
                     sstream << "AGENTS, agent " << agent_idx << ": processed iterations " << (double)iter_idx/max_inner_iterations_loc*100 << "\%";
                     sstream << ", current minimum of agent 0: " << current_minimum_agents[ 0 ] << " global current minimum: " << current_minimum  << " CPU time: " << CPU_time;
                     sstream << " circuit simulation time: " << circuit_simulation_time  << std::endl;
-                    print(sstream, 0); 
+                    print(sstream, 3); 
                 }
 
 

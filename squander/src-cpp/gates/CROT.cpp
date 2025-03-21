@@ -691,23 +691,23 @@ CROT::extract_parameters( Matrix_real& parameters ) {
     Matrix_real extracted_parameters(1,2);
 
     extracted_parameters[0] = std::fmod( 2*parameters[ get_parameter_start_idx() ], 4*M_PI);
-    extracted_parameters[1] = std::fmod( 2*parameters[ get_parameter_start_idx() + 1 ], 2*M_PI);
+    extracted_parameters[1] = std::fmod( parameters[ get_parameter_start_idx() + 1 ], 2*M_PI);
     return extracted_parameters;
     }
     else if (subtype == CONTROL_INDEPENDENT){
     Matrix_real extracted_parameters(1,4);
 
     extracted_parameters[0] = std::fmod( 2*parameters[ get_parameter_start_idx() ], 4*M_PI);
-    extracted_parameters[1] = std::fmod( 2*parameters[ get_parameter_start_idx() + 1 ], 2*M_PI);
+    extracted_parameters[1] = std::fmod( parameters[ get_parameter_start_idx() + 1 ], 2*M_PI);
     extracted_parameters[2] = std::fmod( 2*parameters[ get_parameter_start_idx() +2 ], 4*M_PI);
-    extracted_parameters[3] = std::fmod( 2*parameters[ get_parameter_start_idx() + 3 ], 2*M_PI);
+    extracted_parameters[3] = std::fmod( parameters[ get_parameter_start_idx() + 3 ], 2*M_PI);
     return extracted_parameters;
     }
     else if (subtype == CONTROL_BLOCK){
     Matrix_real extracted_parameters(1,3);
 
     extracted_parameters[0] = std::fmod( 2*parameters[ get_parameter_start_idx() ], 4*M_PI);
-    extracted_parameters[1] = std::fmod( 2*parameters[ get_parameter_start_idx() + 1 ], 2*M_PI);
+    extracted_parameters[1] = std::fmod( parameters[ get_parameter_start_idx() + 1 ], 2*M_PI);
     extracted_parameters[2] = std::fmod( 2*parameters[ get_parameter_start_idx() +2 ], 4*M_PI);
     return extracted_parameters;
     }
