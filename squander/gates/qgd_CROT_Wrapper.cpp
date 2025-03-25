@@ -139,9 +139,6 @@ qgd_CROT_Wrapper_init(qgd_CROT_Wrapper *self, PyObject *args, PyObject *kwds)
     else if ( strcmp("control_independent", subtype_C)==0 || strcmp("CONTROL_INDEPENDENT", subtype_C)==0) {
         qgd_subtype = CONTROL_INDEPENDENT;        
     }
-    else if ( strcmp("control_block", subtype_C)==0 || strcmp("CONTROL_BLOCK", subtype_C)==0) {
-        qgd_subtype = CONTROL_BLOCK;        
-    }
     if (qbit_num != -1 && target_qbit != -1) {
         self->gate = create_CROT( qbit_num, target_qbit, control_qbit,qgd_subtype );
     }

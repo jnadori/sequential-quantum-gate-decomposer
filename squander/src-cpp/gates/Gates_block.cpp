@@ -523,13 +523,6 @@ void Gates_block::get_parameter_max(Matrix_real &range_max) {
                     data[parameter_idx-1] = 2 * M_PI;
                     parameter_idx = parameter_idx - 4;
             }
-            else if (crot_gate->get_subtype() == CONTROL_BLOCK){
-
-                    data[parameter_idx-3] = 4 * M_PI;
-                    data[parameter_idx-2] = 2 * M_PI;
-                    data[parameter_idx-1] = 4 * M_PI;
-                    parameter_idx = parameter_idx - 3;
-            }
             break;}
             case RX_OPERATION:
             case RY_OPERATION:
@@ -1750,15 +1743,6 @@ void Gates_block::list_gates( const Matrix_real &parameters, int start_index ) {
             		sstream << gate_idx << "th gate: CROT_INDEPENDENT with control qubit: " << crot_gate->get_control_qbit() << " and target qubit: " << crot_gate->get_target_qbit()<< " and parameters theta0=" << theta0 <<", phi0="<< phi0 << ", theta1=" << theta1 <<" and phi1="<< phi1 << std::endl;
 		print(sstream, 1);
                     parameter_idx = parameter_idx - 4;
-            }
-            else if (crot_gate->get_subtype() == CONTROL_BLOCK){
-                    double theta0,phi0,theta1,phi1;
-                    theta0 = std::fmod( 2*parameters_data[parameter_idx-3], 4*M_PI);
-                    phi0 = std::fmod( parameters_data[parameter_idx-2], 2*M_PI);
-                    theta1 = std::fmod( 2*parameters_data[parameter_idx-1], 4*M_PI);
-            		sstream << gate_idx << "th gate: CROT_INDEPENDENT with control qubit: " << crot_gate->get_control_qbit() << " and target qubit: " << crot_gate->get_target_qbit()<< " and parameters theta0=" << theta0 <<", phi0="<< phi0 << ", theta1=" << theta1 << std::endl;
-		print(sstream, 1);
-                    parameter_idx = parameter_idx - 3;
             }
                 gate_idx = gate_idx + 1;
             }

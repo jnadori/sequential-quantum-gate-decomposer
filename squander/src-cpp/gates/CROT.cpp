@@ -129,6 +129,37 @@ CROT::apply_to_list( Matrix_real& parameters_mtx, std::vector<Matrix>& input ) {
 }
 
 /**
+@brief Call to apply the gate on the input array/matrix by U3*input
+@param parameters An array of parameters to calculate the matrix of the U3 gate.
+@param input The input array on which the gate is applied
+@param parallel Set 0 for sequential execution, 1 for parallel execution with OpenMP and 2 for parallel with TBB (optional)
+*/
+void 
+CROT::apply_to_list( Matrix_real& parameters_mtx, std::vector<Matrix>& inputs, int parallel ) {
+
+    int work_batch = 1;
+    if ( parallel == 0 ) {
+        work_batch = inputs.size();
+    }
+    else {
+        work_batch = 1;
+    }
+
+
+    tbb::parallel_for( tbb::blocked_range<int>(0,inputs.size(),work_batch), [&](tbb::blocked_range<int> r) {
+        for (int idx=r.begin(); idx<r.end(); ++idx) { 
+
+            Matrix* input = &inputs[idx];
+
+            apply_to( parameters_mtx, *input, parallel );
+
+        }
+
+    });
+
+}
+
+/**
 @brief Call to apply the gate on the input array/matrix by CROT3*input
 @param parameters An array of parameters to calculate the matrix of the U3 gate.
 @param input The input array on which the gate is applied
@@ -251,7 +282,7 @@ CROT::apply_from_right( Matrix_real& parameters, Matrix& input ) {
 @param input The input array on which the gate is applied
 */
 std::vector<Matrix> 
-CROT::apply_derivate_to( Matrix_real& parameters_mtx, Matrix& input ) {
+CROT::apply_derivate_to( Matrix_real& parameters_mtx, Matrix& input, int parallel ) {
 
     if (input.rows != matrix_size ) {
 	std::stringstream sstream;

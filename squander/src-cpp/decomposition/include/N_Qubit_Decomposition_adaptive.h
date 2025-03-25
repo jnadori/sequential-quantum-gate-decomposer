@@ -76,10 +76,6 @@ protected:
     /// Boolean variable to determine whether randomized adaptive layers are used or not
     bool randomized_adaptive_layers;
     
-    bool custom_layers;
-    
-    Gates_block* custom_layer_template;
-    
     
 
 public:
@@ -217,16 +213,6 @@ void add_adaptive_layers();
 void add_adaptive_layers( Gates_block* gate_structure );
 
 /**
-@brief Call to add adaptive layers to the gate structure stored by the class.
-*/
-void add_custom_layers();
-
-/**
-@brief Call to add adaptive layers to the gate structure.
-*/
-void add_custom_layers( Gates_block* gate_structure );
-
-/**
 @brief Call to construct adaptive layers.
 */
 Gates_block* construct_adaptive_gate_layers();
@@ -283,7 +269,7 @@ void apply_imported_gate_structure();
 */
 void add_layer_to_imported_gate_structure();
 
-void set_custom_layer_template(Gates_block* custom_layer_template_in );
+
 
 };
 
