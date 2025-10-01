@@ -77,7 +77,7 @@ typedef enum gate_type {GENERAL_OPERATION=1,
                         N_QUBIT_PHASE_OPERATION=44,
                         CNZ_OPERATION=45,
                         CNZ_NU_OPERATION=46,
-			N_QUBIT_PERMUTATION_OPERATION=47,
+			            N_QUBIT_PERMUTATION_OPERATION=47,
                         N_QUBIT_PERMUTATION_NU_OPERATION=48} gate_type;
 
 	

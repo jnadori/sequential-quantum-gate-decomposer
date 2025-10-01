@@ -78,10 +78,13 @@ N_Qubit_Permutation_NU::N_Qubit_Permutation_NU(int qbit_num_in) {
     all_patterns = construct_all_possible_patterns(qbit_num_in);
     n_perm = (int)all_patterns.size();
     centers = std::vector<double> {};
-    //load up center vector 
+    //load up center vector - spread evenly across [0, 2π]
     for (int idx=0; idx<n_perm;idx++){
-        centers.push_back(idx);
+        centers.push_back(static_cast<double>(idx) * 2.0 * M_PI / n_perm);
     }
+
+    // Initialize temperature (0.05 balances sharpness and smoothness)
+    temperature = 0.05;
 }
 
 
@@ -150,7 +153,7 @@ N_Qubit_Permutation_NU::apply_to(Matrix_real& parameters_mtx, Matrix& input, int
         Matrix P_idx = construct_matrix_from_pattern(all_patterns[idx]);
         QGD_Complex16 factor;
         factor.imag = 0;
-        factor.real = g_k(x,idx);
+        factor.real = softmax_k(x,idx);
         mult(factor, P_idx);
         matrix_addition(NU_matrix,P_idx);
     }
@@ -185,7 +188,7 @@ N_Qubit_Permutation_NU::apply_from_right(Matrix_real& parameters_mtx, Matrix& in
         Matrix P_idx = construct_matrix_from_pattern(all_patterns[idx]);
         QGD_Complex16 factor;
         factor.imag = 0;
-        factor.real = g_k(x,idx);
+        factor.real = softmax_k(x,idx);
         mult(factor, P_idx);
         matrix_addition(NU_matrix,P_idx);
     }
@@ -222,7 +225,7 @@ N_Qubit_Permutation_NU::apply_derivate_to( Matrix_real& parameters_mtx, Matrix& 
         Matrix P_idx = construct_matrix_from_pattern(all_patterns[idx]);
         QGD_Complex16 factor;
         factor.imag = 0;
-        factor.real = g_k_derivative(x,idx);
+        factor.real = softmax_k_derivative(x,idx);
         mult(factor, P_idx);
         matrix_addition(NU_matrix,P_idx);
     }
@@ -298,41 +301,95 @@ Matrix N_Qubit_Permutation_NU::construct_matrix_from_pattern(std::vector<int> pa
     return perm_matrix;
 }
 
-// Evaluate Lagrange basis function f_k(x)
-double N_Qubit_Permutation_NU::f_k(double x, int k) {
-    return std::exp(-10.*(x-centers[k])*(x-centers[k]));
-}
+// Compute softmax probability for permutation k
+// x parameter wraps around [0, 2π] to select which permutation
+double N_Qubit_Permutation_NU::softmax_k(double x, int k) {
+    // Wrap x to [0, 2π] range
+    x = x - std::floor(x / (2.0 * M_PI)) * (2.0 * M_PI);
+    if (x < 0) x += 2.0 * M_PI;
 
-// Derivative of f_k(x) using optimized formula
-double N_Qubit_Permutation_NU::f_k_derivative(double x, int k) {
-    double fk = f_k(x, k);
-    return fk * -20.0 * (x-centers[k]);
-}
+    // Compute logits based on negative squared distance from x to each center
+    // Use periodic distance: min(|x-c|, 2π-|x-c|) for circular wrapping
+    double dx = std::abs(x - centers[k]);
+    double periodic_dist = std::min(dx, 2.0 * M_PI - dx);
+    double logit_k = -(periodic_dist * periodic_dist) / temperature;
 
-// Normalized non-negative Lagrange function g_k(x)
-double N_Qubit_Permutation_NU::g_k(double x, int k) {
-    double sum = 0.0;
+    // Compute softmax denominator
+    double sum_exp = 0.0;
     for (int j = 0; j < n_perm; j++) {
-        double fj = f_k(x, j);
-        sum += fj ;
-    }
-    double fk = f_k(x, k);
-    return (fk) / sum;
-}
-
-// Derivative of g_k(x) using chain rule
-double N_Qubit_Permutation_NU::g_k_derivative(double x, int k) {
-    double fk = f_k(x, k);
-    double fk_prime = f_k_derivative(x, k);
-
-    double sum = 0.0;
-
-    for (int j = 0; j < n_perm; j++) {
-        double fj = f_k(x, j);
-        sum += fj;
+        double dx_j = std::abs(x - centers[j]);
+        double periodic_dist_j = std::min(dx_j, 2.0 * M_PI - dx_j);
+        double logit_j = -(periodic_dist_j * periodic_dist_j) / temperature;
+        sum_exp += std::exp(logit_j);
     }
 
-    return (fk_prime * sum - fk * fk_prime) / (sum * sum);
+    // Safeguard against numerical issues
+    if (sum_exp < 1e-100) {
+        return 0.0;
+    }
+
+    return std::exp(logit_k) / sum_exp;
+}
+
+// Derivative of softmax probability w.r.t. x
+double N_Qubit_Permutation_NU::softmax_k_derivative(double x, int k) {
+    // Wrap x to [0, 2π] range
+    x = x - std::floor(x / (2.0 * M_PI)) * (2.0 * M_PI);
+    if (x < 0) x += 2.0 * M_PI;
+
+    // Compute softmax probabilities
+    std::vector<double> probs(n_perm);
+    double sum_exp = 0.0;
+    for (int j = 0; j < n_perm; j++) {
+        double dx_j = std::abs(x - centers[j]);
+        double periodic_dist_j = std::min(dx_j, 2.0 * M_PI - dx_j);
+        double logit_j = -(periodic_dist_j * periodic_dist_j) / temperature;
+        probs[j] = std::exp(logit_j);
+        sum_exp += probs[j];
+    }
+
+    // Normalize probabilities
+    for (int j = 0; j < n_perm; j++) {
+        probs[j] /= sum_exp;
+    }
+
+    // Compute derivative of logit_k w.r.t. x
+    // For periodic distance, d/dx of -((min(|x-c|, 2π-|x-c|))^2/τ)
+    double dx = x - centers[k];
+    double abs_dx = std::abs(dx);
+    double periodic_dist = std::min(abs_dx, 2.0 * M_PI - abs_dx);
+
+    // Derivative is -2*periodic_dist*sign(x-c)/τ if |x-c| < π, else opposite sign
+    double dlogit_k_dx;
+    if (abs_dx < M_PI) {
+        dlogit_k_dx = -2.0 * periodic_dist * (dx >= 0 ? 1.0 : -1.0) / temperature;
+    } else {
+        dlogit_k_dx = -2.0 * periodic_dist * (dx >= 0 ? -1.0 : 1.0) / temperature;
+    }
+
+    // Compute sum of weighted gradients
+    double sum_weighted_grad = 0.0;
+    for (int j = 0; j < n_perm; j++) {
+        double dx_j = x - centers[j];
+        double abs_dx_j = std::abs(dx_j);
+        double periodic_dist_j = std::min(abs_dx_j, 2.0 * M_PI - abs_dx_j);
+
+        double dlogit_j_dx;
+        if (abs_dx_j < M_PI) {
+            dlogit_j_dx = -2.0 * periodic_dist_j * (dx_j >= 0 ? 1.0 : -1.0) / temperature;
+        } else {
+            dlogit_j_dx = -2.0 * periodic_dist_j * (dx_j >= 0 ? -1.0 : 1.0) / temperature;
+        }
+
+        sum_weighted_grad += probs[j] * dlogit_j_dx;
+    }
+
+    return probs[k] * (dlogit_k_dx - sum_weighted_grad);
+}
+
+// Set temperature parameter
+void N_Qubit_Permutation_NU::set_temperature(double temp) {
+    temperature = temp;
 }
 
 void N_Qubit_Permutation_NU::matrix_addition(Matrix& lhs, Matrix rhs){

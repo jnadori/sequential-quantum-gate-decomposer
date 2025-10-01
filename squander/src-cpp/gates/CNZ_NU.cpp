@@ -77,12 +77,13 @@ CNZ_NU::CNZ_NU(int qbit_num_in) {
     parameter_num = 1;
 
     // Initialize centers for computing distance-based logits
+    // Spread centers evenly across [0, 2π]
     centers = std::vector<double>();
     for (int idx = 0; idx < matrix_size; idx++){
-        centers.push_back(static_cast<double>(idx));  // Use integer positions
+        centers.push_back(static_cast<double>(idx) * 2.0 * M_PI / matrix_size);
     }
 
-    // Initialize temperature (0.01 gives sharp softmax close to discrete selection)
+    // Initialize temperature (0.05 gives sharp softmax close to discrete selection)
     temperature = 0.05;
 }
 
@@ -258,18 +259,22 @@ CNZ_NU::apply_from_right(Matrix_real& parameters_mtx, Matrix& input ) {
 // Compute softmax probability for position k
 // Uses distance from x (wrapped to [0, matrix_size)) to each center
 double CNZ_NU::softmax_k(double x, int k) {
-    // Wrap x to [0, matrix_size) range
-    x = x - std::floor(x / matrix_size) * matrix_size;
-    if (x < 0) x += matrix_size;
+    // Wrap x to [0, 2π] range
+    x = x - std::floor(x / (2.0 * M_PI)) * (2.0 * M_PI);
+    if (x < 0) x += 2.0 * M_PI;
 
-    // Compute logits based on negative squared distance from x to each center
-    // Closer centers get higher logits
-    double logit_k = -((x - centers[k]) * (x - centers[k])) / temperature;
+    // Compute logits based on negative squared periodic distance from x to each center
+    // Use periodic distance: min(|x-c|, 2π-|x-c|) for circular wrapping
+    double dx = std::abs(x - centers[k]);
+    double periodic_dist = std::min(dx, 2.0 * M_PI - dx);
+    double logit_k = -(periodic_dist * periodic_dist) / temperature;
 
     // Compute softmax denominator
     double sum_exp = 0.0;
     for (int j = 0; j < matrix_size; j++) {
-        double logit_j = -((x - centers[j]) * (x - centers[j])) / temperature;
+        double dx_j = std::abs(x - centers[j]);
+        double periodic_dist_j = std::min(dx_j, 2.0 * M_PI - dx_j);
+        double logit_j = -(periodic_dist_j * periodic_dist_j) / temperature;
         sum_exp += std::exp(logit_j);
     }
 

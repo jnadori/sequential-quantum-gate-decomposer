@@ -36,10 +36,13 @@ class N_Qubit_Permutation_NU : public Gate {
 
 
 protected:
-   
+
    std::vector<std::vector<int>> all_patterns;
    std::vector<double> centers;
    int n_perm;
+
+   /// Temperature parameter for softmax (lower = more discrete)
+   double temperature;
 
 public:
 
@@ -74,14 +77,13 @@ public:
     
     Matrix construct_matrix_from_pattern(std::vector<int> pattern);
 
-    // Lagrange basis functions
-    double f_k(double x, int k);
-    
-    double f_k_derivative(double x, int k);
-    
-    double g_k(double x, int k);
-    
-    double g_k_derivative(double x, int k);
+    // Softmax functions for smooth permutation selection
+    double softmax_k(double x, int k);
+
+    double softmax_k_derivative(double x, int k);
+
+    // Set temperature parameter
+    void set_temperature(double temp);
 
     // Matrix addition helper
     void matrix_addition(Matrix& lhs, Matrix rhs);
