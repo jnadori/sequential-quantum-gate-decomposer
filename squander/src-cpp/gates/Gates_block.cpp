@@ -475,7 +475,8 @@ void Gates_block::get_parameter_max(Matrix_real &range_max) {
                 data[parameter_idx] = 4 * M_PI;
                 parameter_idx = parameter_idx + 1;
                 break;
-            case CZ_NU_OPERATION:
+            case CZ_NU_OPERATION: 
+            case N_QUBIT_PERMUTATION_NU_OPERATION:
                 data[parameter_idx] = 2 * M_PI;
                 parameter_idx = parameter_idx + 1;
                 break;
@@ -547,7 +548,7 @@ Gates_block::apply_from_right( Matrix_real& parameters_mtx, Matrix& input ) {
         case CRY_OPERATION: case CR_OPERATION:
         case CRX_OPERATION: case CRZ_OPERATION:
         case CZ_NU_OPERATION: case CP_OPERATION:
-        case ADAPTIVE_OPERATION:
+        case ADAPTIVE_OPERATION: case N_QUBIT_PERMUTATION_NU_OPERATION:
         {
             operation->apply_from_right( parameters_mtx, input );
         }
@@ -561,7 +562,8 @@ Gates_block::apply_from_right( Matrix_real& parameters_mtx, Matrix& input ) {
             on_operation->apply_from_right( parameters_mtx, input );
             break; 
         }
-        case N_QUBIT_PHASE_OPERATION:{
+        case N_QUBIT_PHASE_OPERATION:
+        {
             N_Qubit_Phase_Gate* on_operation = static_cast<N_Qubit_Phase_Gate*>(operation);
             on_operation->apply_from_right( parameters_mtx, input );
             break; 
@@ -2608,6 +2610,7 @@ void Gates_block::set_qbit_num( int qbit_num_in ) {
         case S_OPERATION: case SDG_OPERATION:
         case T_OPERATION: case TDG_OPERATION:
         case CNZ_OPERATION: case N_QUBIT_PHASE_OPERATION:
+        case N_QUBIT_PERMUTATION_NU_OPERATION:
             op->set_qbit_num( qbit_num_in );
             break;
         default:
@@ -2674,7 +2677,7 @@ int Gates_block::extract_gates( Gates_block* op_block ) {
         case CNZ_OPERATION: case N_QUBIT_PHASE_OPERATION:
         case SWAP_OPERATION:
         case CSWAP_OPERATION: case CCX_OPERATION:
-
+        case N_QUBIT_PERMUTATION_NU_OPERATION:
         {
             Gate* op_cloned = op->clone();
             op_block->add_gate( op_cloned );
