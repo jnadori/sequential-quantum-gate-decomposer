@@ -55,7 +55,8 @@ def optimize_circuit_scipy(
     Args:
         Umtx: Target unitary matrix (conjugate transposed)
         circuit: Circuit structure to optimize
-        method: scipy optimization method ('L-BFGS-B', 'BFGS', 'CG', 'Powell', etc.)
+        method: scipy optimization method ('L-BFGS-B', 'BFGS', 'CG', 'Powell',
+                'basinhopping', 'CMA-ES', etc.)
         initial_params: Initial parameter values (random if None)
         config: Configuration dictionary with keys:
             - max_iterations: Maximum number of iterations
@@ -114,8 +115,72 @@ def optimize_circuit_scipy(
     if verbose >= 2:
         options['disp'] = True
 
-    # Run optimization
-    if method in ['L-BFGS-B', 'BFGS', 'CG', 'Newton-CG', 'TNC']:
+    # Run optimization based on method type
+    if method == 'basinhopping':
+        # Basin-hopping global optimization
+        from scipy.optimize import basinhopping
+
+        # Minimizer kwargs for local optimization
+        minimizer_kwargs = {
+            'method': 'L-BFGS-B',
+            'jac': True,
+            'options': {'maxiter': 50}  # Iterations per basin
+        }
+
+        # Basin-hopping iterations (use fewer iterations for speed)
+        # max_iterations in config refers to total local minimization iterations,
+        # so divide by iterations per basin to get number of basin hops
+        niter = config.get('basinhopping_niter', 10)  # Default: 10 basin hops
+
+        result = basinhopping(
+            cost_and_grad,
+            initial_params,
+            minimizer_kwargs=minimizer_kwargs,
+            niter=niter,
+            disp=verbose >= 2
+        )
+
+    elif method == 'CMA-ES':
+        # CMA-ES optimization (requires cmaes package)
+        try:
+            import cma
+        except ImportError:
+            raise ImportError(
+                "CMA-ES optimizer requires the 'cma' package. "
+                "Install it with: pip install cma"
+            )
+
+        # CMA-ES options
+        sigma0 = config.get('cma_sigma0', 0.5)  # Initial step size
+        max_iter = config.get('max_iterations', 1000)
+
+        cma_options = {
+            'maxiter': max_iter,
+            'tolfun': tol,
+            'verbose': -1 if verbose < 2 else 1
+        }
+
+        # Run CMA-ES
+        es = cma.CMAEvolutionStrategy(initial_params, sigma0, cma_options)
+        es.optimize(cost_fn)
+
+        # Get result
+        result_x = es.result.xbest
+        result_fun = es.result.fbest
+
+        # Create result object compatible with scipy format
+        class CMAResult:
+            def __init__(self, x, fun, nfev):
+                self.x = x
+                self.fun = fun
+                self.success = True
+                self.message = "CMA-ES optimization completed"
+                self.nfev = nfev
+                self.nit = es.result.iterations
+
+        result = CMAResult(result_x, result_fun, es.result.evaluations)
+
+    elif method in ['L-BFGS-B', 'BFGS', 'CG', 'Newton-CG', 'TNC']:
         # Methods that support gradients
         result = minimize(
             cost_and_grad,

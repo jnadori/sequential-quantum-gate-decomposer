@@ -27,6 +27,7 @@ from squander.synthesis.circuit_builder import (
     visualize_circuit_structure
 )
 from squander.synthesis.optimizer_wrapper import optimize_circuit, OptimizationResult
+from squander.synthesis.astar_search import AStarTreeSearch
 
 
 class TreeSearchDecomposition:
@@ -65,6 +66,7 @@ class TreeSearchDecomposition:
             topology: Optional list of (target, control) qubit pairs.
                      If None, all-to-all connectivity is assumed.
             config: Configuration dictionary with keys:
+                - search_mode: 'exhaustive' or 'astar' (default 'exhaustive')
                 - tree_level_max: Maximum tree depth (default 10)
                 - tree_level_min: Minimum tree depth (default 0)
                 - optimization_tolerance: Target cost (default 1e-8)
@@ -73,6 +75,8 @@ class TreeSearchDecomposition:
                 - cost_function_variant: Cost function type (default 3)
                 - num_trials_per_level: Number of random restarts (default 1)
                 - parallel: Enable parallel evaluation (default False)
+                - beam_width: Beam width for A* (0 = no beam search, default 0)
+                - heuristic_type: Heuristic for A* ('quick_opt', 'gradient_norm', 'random_sample')
             verbose: Verbosity level (0=silent, 1=progress, 2=detailed, 3=debug)
         """
         self.Umtx = Umtx
@@ -84,6 +88,7 @@ class TreeSearchDecomposition:
 
         # Configuration
         self.config = config if config is not None else {}
+        self.search_mode = self.config.get('search_mode', 'exhaustive')
         self.tree_level_max = self.config.get('tree_level_max', 10)
         self.tree_level_min = self.config.get('tree_level_min', 0)
         self.optimization_tolerance = self.config.get('optimization_tolerance', 1e-8)
@@ -258,8 +263,15 @@ class TreeSearchDecomposition:
                 - parameters: Optimized parameters
                 - total_time: Total search time
         """
+        if self.search_mode == 'astar':
+            return self._run_astar_search()
+        else:
+            return self._run_exhaustive_search()
+
+    def _run_exhaustive_search(self) -> Dict[str, Any]:
+        """Run exhaustive tree search over all levels."""
         self._log(1, "="*70)
-        self._log(1, f"Tree Search Decomposition for {self.qbit_num}-qubit unitary")
+        self._log(1, f"Exhaustive Tree Search for {self.qbit_num}-qubit unitary")
         self._log(1, f"Topology: {len(self.topology)} allowed CNOT connections")
         self._log(1, f"Optimizer: {self.optimizer}")
         self._log(1, f"Target tolerance: {self.optimization_tolerance:.2e}")
@@ -305,6 +317,29 @@ class TreeSearchDecomposition:
             'total_time': total_time,
             'search_history': self.search_history
         }
+
+    def _run_astar_search(self) -> Dict[str, Any]:
+        """Run A* search."""
+        # Create A* searcher
+        astar = AStarTreeSearch(
+            self.Umtx,
+            self.topology,
+            self.config,
+            self.verbose
+        )
+
+        # Run search
+        result = astar.search()
+
+        # Update our state with A* results
+        if result['success'] or result['cost'] < self.best_cost:
+            self.best_cost = result['cost']
+            self.best_level = result['level']
+            self.best_gray_code = result['gray_code']
+            self.best_circuit = result['circuit']
+            self.best_parameters = result['parameters']
+
+        return result
 
     def get_circuit(self) -> Optional[Circuit]:
         """Get the best circuit found."""
