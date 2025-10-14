@@ -2,6 +2,7 @@ import numpy as np
 import squander
 from squander import N_Qubit_Decomposition_custom, Circuit
 from scipy.optimize import dual_annealing
+import matplotlib.pyplot as plt
 
 np.set_printoptions(linewidth=200, precision=6, suppress=True)
 
@@ -91,9 +92,16 @@ def test_decomposition(N, levels, gate_type, num_samples=10):
 
 def find_minimum_layers(N, gate_type, target_cost=1e-8, max_layers=50, step=5, num_samples=10):
     """
-    Find minimum layers needed to reach target cost
+    Find minimum layers needed to reach target cost and collect all data
+    Continues for 3 more layer counts after first success
+    Returns: (layers, min_cost, mean_cost, max_cost, layer_data)
+    where layer_data = list of (layers, min_cost, mean_cost, max_cost) tuples
     """
     print(f"\n  Searching for {gate_type} with {num_samples} samples per layer count...", flush=True)
+
+    layer_data = []
+    success_layers = None
+    layers_after_success = 0
 
     for layers in range(step, max_layers + 1, step):
         print(f"    Testing {layers:2d} layers... ", end='', flush=True)
@@ -101,17 +109,93 @@ def find_minimum_layers(N, gate_type, target_cost=1e-8, max_layers=50, step=5, n
         mean_cost, min_cost, max_cost, success_rate = test_decomposition(N, layers, gate_type, num_samples=num_samples)
 
         if min_cost is not None:
+            layer_data.append((layers, min_cost, mean_cost, max_cost))
             print(f"min={min_cost:.2e} mean={mean_cost:.2e} max={max_cost:.2e}", end='')
-            if min_cost < target_cost:
+            if success_layers is None and min_cost < target_cost:
                 print(f"  ✓ SUCCESS!")
-                return layers, min_cost, mean_cost, max_cost
+                success_layers = layers
             else:
                 print()
+
+            # Count layers after success
+            if success_layers is not None:
+                layers_after_success += 1
+                if layers_after_success >= 3:
+                    print(f"    Stopping after {layers_after_success} additional layer counts past success")
+                    break
         else:
             print("FAILED")
 
-    print(f"    Could not reach target with {max_layers} layers")
-    return None, None, None, None
+    if success_layers is None:
+        print(f"    Could not reach target with {max_layers} layers")
+        if layer_data:
+            # Return best result we got
+            best_idx = min(range(len(layer_data)), key=lambda i: layer_data[i][1])
+            return layer_data[best_idx][0], layer_data[best_idx][1], layer_data[best_idx][2], layer_data[best_idx][3], layer_data
+        return None, None, None, None, []
+
+    # Find the success result
+    for data in layer_data:
+        if data[0] == success_layers:
+            return success_layers, data[1], data[2], data[3], layer_data
+
+    return None, None, None, None, layer_data
+
+def plot_comparison(all_layer_data, target_cost):
+    """
+    Plot cost vs layers for both gate types
+    all_layer_data: dict with keys like (N, gate_type) -> layer_data
+    """
+    # Group by number of qubits
+    qubits = sorted(set(k[0] for k in all_layer_data.keys()))
+
+    fig, axes = plt.subplots(1, len(qubits), figsize=(6*len(qubits), 5))
+    if len(qubits) == 1:
+        axes = [axes]
+
+    for idx, N in enumerate(qubits):
+        ax = axes[idx]
+
+        # Plot CNZ data
+        cnz_key = (N, 'CNZ')
+        if cnz_key in all_layer_data and all_layer_data[cnz_key]:
+            data = all_layer_data[cnz_key]
+            layers = [d[0] for d in data]
+            mins = [d[1] for d in data]
+            means = [d[2] for d in data]
+            maxs = [d[3] for d in data]
+
+            ax.plot(layers, mins, 'o-', label='CNZ min', color='blue', linewidth=2)
+            ax.plot(layers, means, 's-', label='CNZ mean', color='blue', linewidth=2, alpha=0.6)
+            ax.plot(layers, maxs, '^-', label='CNZ max', color='blue', linewidth=2, alpha=0.3)
+
+        # Plot CNZ_NU data
+        cnz_nu_key = (N, 'CNZ_NU')
+        if cnz_nu_key in all_layer_data and all_layer_data[cnz_nu_key]:
+            data = all_layer_data[cnz_nu_key]
+            layers = [d[0] for d in data]
+            mins = [d[1] for d in data]
+            means = [d[2] for d in data]
+            maxs = [d[3] for d in data]
+
+            ax.plot(layers, mins, 'o-', label='CNZ_NU min', color='red', linewidth=2)
+            ax.plot(layers, means, 's-', label='CNZ_NU mean', color='red', linewidth=2, alpha=0.6)
+            ax.plot(layers, maxs, '^-', label='CNZ_NU max', color='red', linewidth=2, alpha=0.3)
+
+        # Target line
+        ax.axhline(y=target_cost, color='green', linestyle='--', linewidth=2, label=f'Target ({target_cost:.0e})')
+
+        ax.set_yscale('log')
+        ax.set_xlabel('Number of Layers', fontsize=12)
+        ax.set_ylabel('Cost Function', fontsize=12)
+        ax.set_title(f'{N}-Qubit QFT', fontsize=14, fontweight='bold')
+        ax.legend(loc='best', fontsize=10)
+        ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig('cnz_comparison.png', dpi=150, bbox_inches='tight')
+    print(f"\nVisualization saved to cnz_comparison.png")
+    plt.show()
 
 def main():
     """Run comparison"""
@@ -123,6 +207,7 @@ def main():
     print("="*70)
 
     results = []
+    all_layer_data = {}
     target_cost = 1e-8
     num_samples = 100
 
@@ -133,6 +218,9 @@ def main():
 
     cnz_result_3 = find_minimum_layers(3, 'CNZ', target_cost, max_layers=50, step=1, num_samples=num_samples)
     cnz_nu_result_3 = find_minimum_layers(3, 'CNZ_NU', target_cost, max_layers=50, step=1, num_samples=num_samples)
+
+    all_layer_data[(3, 'CNZ')] = cnz_result_3[4]
+    all_layer_data[(3, 'CNZ_NU')] = cnz_nu_result_3[4]
 
     results.append({
         'N': 3,
@@ -150,14 +238,18 @@ def main():
         'mean_cost': cnz_nu_result_3[2],
         'max_cost': cnz_nu_result_3[3]
     })
-
+    plot_comparison(all_layer_data, target_cost)
+"""
     # Test 4 qubits
     print("\n" + "="*70)
     print("4-QUBIT QFT")
     print("="*70)
 
-    cnz_result_4 = find_minimum_layers(4, 'CNZ', target_cost, max_layers=50, step=1, num_samples=int(num_samples/5))
-    cnz_nu_result_4 = find_minimum_layers(4, 'CNZ_NU', target_cost, max_layers=50, step=1, num_samples=int(num_samples/5))
+    cnz_result_4 = find_minimum_layers(4, 'CNZ', target_cost, max_layers=50, step=5, num_samples=int(num_samples/5))
+    cnz_nu_result_4 = find_minimum_layers(4, 'CNZ_NU', target_cost, max_layers=50, step=5, num_samples=int(num_samples/5))
+
+    all_layer_data[(4, 'CNZ')] = cnz_result_4[4]
+    all_layer_data[(4, 'CNZ_NU')] = cnz_nu_result_4[4]
 
     results.append({
         'N': 4,
@@ -192,5 +284,8 @@ def main():
 
     print("="*70)
 
+    # Generate visualization
+    plot_comparison(all_layer_data, target_cost)
+"""
 if __name__ == "__main__":
     main()
