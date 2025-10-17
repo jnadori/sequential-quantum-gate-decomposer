@@ -94,10 +94,28 @@ class qgd_Circuit(qgd_Circuit_Wrapper):
     """
 
     def __copy__(self):
-        cCircuit = qgd_Circuit(self.get_Qbit_Num())
-        for gate in self.get_Gates():
-            cCircuit.add_Gate(gate)
-        return cCircuit
+        """
+        Shallow copy implementation using Python's copy protocol.
+        Creates a new circuit with the same gates.
+        """
+        return self.copy()
+
+    def __deepcopy__(self, memo):
+        """
+        Deep copy implementation using Python's copy protocol.
+        Creates a new circuit with all gates deeply copied.
+        @param memo A dictionary to track already copied objects.
+        @return A new qgd_Circuit instance with all gates copied.
+        """
+        return self.copy()
+
+    def copy(self):
+        """
+        Create a deep copy of the circuit.
+        @return A new qgd_Circuit instance with all gates copied.
+        """
+        # Call the C wrapper function that uses the clone() method
+        return super().copy()
 #@brief Call to add a U1 gate to the front of the gate structure.
 #@param self A pointer pointing to an instance of the class qgd_Circuit.
 #@param Input argument: target_qbit (int)
