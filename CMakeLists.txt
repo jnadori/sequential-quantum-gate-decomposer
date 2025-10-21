@@ -318,7 +318,7 @@ list(APPEND qgd_files
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/common/BFGS_Powell.cpp
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/common/Powells_method.cpp
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/common/Bayes_Opt.cpp
-    ${PROJECT_SOURCE_DIR}/squander/src-cpp/common/LBFGS.cpp
+    ${PROJECT_SOURCE_DIR}/squander/src-cpp/common/lbfgs.cpp
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/common/n_aryGrayCodeCounter.cpp 
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/optimization_engines/RL_experience.cpp
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/optimization_engines/ADAM_BATCHED.cpp    
@@ -331,6 +331,7 @@ list(APPEND qgd_files
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/optimization_engines/COSINE.cpp
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/optimization_engines/GRAD_DESCEND.cpp
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/optimization_engines/GRAD_DESCEND_PARAMETER_SHIFT_RULE.cpp
+    ${PROJECT_SOURCE_DIR}/squander/src-cpp/optimization_engines/LBFGS.cpp
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/gates/CU.cpp
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/gates/CNOT.cpp
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/gates/SYC.cpp

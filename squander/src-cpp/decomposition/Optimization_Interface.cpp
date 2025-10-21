@@ -25,6 +25,7 @@ limitations under the License.
 #include "Adam.h"
 #include "grad_descend.h"
 #include "BFGS_Powell.h"
+#include "lbfgs.h"
 #include "Bayes_Opt.h"
 
 #include "RL_experience.h"
@@ -441,6 +442,9 @@ void Optimization_Interface::solve_layer_optimization_problem( int num_of_parame
             return;
         case BFGS:
             solve_layer_optimization_problem_BFGS( num_of_parameters, solution_guess);
+            return;
+        case LBFGS_ALG:
+            solve_layer_optimization_problem_LBFGS( num_of_parameters, solution_guess);
             return;
         case BAYES_OPT:
             solve_layer_optimization_problem_BAYES_OPT( num_of_parameters, solution_guess);
@@ -1381,7 +1385,11 @@ void Optimization_Interface::set_optimizer( optimization_aglorithms alg_in ) {
             random_shift_count_max = 100;
             max_outer_iterations = 1;
             return;
-        
+        case LBFGS_ALG:
+            max_inner_iterations = 10000;
+            random_shift_count_max = 1;  
+            max_outer_iterations = 1e8; 
+            return;
         case BAYES_OPT:
             max_inner_iterations = 100;
             random_shift_count_max = 100;

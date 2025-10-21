@@ -1722,6 +1722,9 @@ qgd_N_Qubit_Decomposition_adaptive_Wrapper_set_Optimizer( qgd_N_Qubit_Decomposit
     if ( strcmp("bfgs", optimizer_C) == 0 || strcmp("BFGS", optimizer_C) == 0) {
         qgd_optimizer = BFGS;        
     }
+    else if ( strcmp("lbfgs", optimizer_C)==0 || strcmp("LBFGS", optimizer_C)==0) {
+        qgd_optimizer = LBFGS_ALG;        
+    }
     else if ( strcmp("adam", optimizer_C)==0 || strcmp("ADAM", optimizer_C)==0) {
         qgd_optimizer = ADAM;        
     }

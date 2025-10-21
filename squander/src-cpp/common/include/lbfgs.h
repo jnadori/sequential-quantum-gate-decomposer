@@ -15,8 +15,8 @@ limitations under the License.
 
 */
 
-# ifndef __LBFGS__H
-# define __LBFGS__H
+#ifndef __LBFGS__H
+#define __LBFGS__H
 
 #include "grad_descend.h"
 
@@ -40,14 +40,24 @@ protected:
 
     int current_size;
 
-protected:
+public:
 
 LBFGS(void (* f_pointer) (Matrix_real, void *, double *, Matrix_real&), void* meta_data_in);
 
-void Optimize();
+void Initialize();
 
+void Optimize(Matrix_real& x, double& f);
+
+void Two_Loop_Update(Matrix_real& g, Matrix_real& search_direction, double* rho);
+
+double M3_scaling(Matrix_real y, Matrix_real s);
 
 void update_history(Matrix_real s_k, Matrix_real y_k, double* rho);
+
+void line_search(Matrix_real& x, Matrix_real& g, Matrix_real& search_direction, Matrix_real& x0_search, Matrix_real& g0_search, double& maximal_step, double& d__dot__g0, double& f);
+
 ~LBFGS();
+
 };
-#endif
+
+#endif  // __LBFGS__H

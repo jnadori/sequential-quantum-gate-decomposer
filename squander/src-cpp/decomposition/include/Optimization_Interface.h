@@ -25,6 +25,7 @@ limitations under the License.
 
 #include "Decomposition_Base.h"
 #include "BFGS_Powell.h"
+#include "lbfgs.h"
 #include "Bayes_Opt.h"
 #include "Powells_method.h"
 
@@ -45,7 +46,7 @@ typedef enum cost_function_type {FROBENIUS_NORM, FROBENIUS_NORM_CORRECTION1, FRO
 
 
 /// implemented optimization strategies
-enum optimization_aglorithms{ ADAM, BFGS, BFGS2, ADAM_BATCHED, AGENTS, COSINE, AGENTS_COMBINED, GRAD_DESCEND, BAYES_OPT, BAYES_AGENTS, GRAD_DESCEND_PARAMETER_SHIFT_RULE};
+enum optimization_aglorithms{ ADAM, BFGS, BFGS2, ADAM_BATCHED, AGENTS, COSINE, AGENTS_COMBINED, GRAD_DESCEND, BAYES_OPT, BAYES_AGENTS, GRAD_DESCEND_PARAMETER_SHIFT_RULE, LBFGS_ALG};
 
 
 #ifdef __cplusplus
@@ -265,6 +266,13 @@ void solve_layer_optimization_problem_AGENTS_COMBINED( int num_of_parameters, Ma
 @param solution_guess A matrix containing the solution guess.
 */
 void solve_layer_optimization_problem_BFGS( int num_of_parameters, Matrix_real& solution_guess);
+
+/**
+@brief Call to solve layer by layer the optimization problem via LBFGS algorithm. (optimal for smaller problems) The optimalized parameters are stored in attribute optimized_parameters.
+@param num_of_parameters Number of parameters to be optimized
+@param solution_guess A matrix containing the solution guess.
+*/
+void solve_layer_optimization_problem_LBFGS( int num_of_parameters, Matrix_real& solution_guess);
 
 
 /**
