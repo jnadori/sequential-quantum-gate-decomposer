@@ -268,6 +268,7 @@ CNZ* CNZ::clone() {
 
     CNZ* ret = new CNZ( qbit_num, phase_idx );
 
+    ret->set_parameter_start_idx( get_parameter_start_idx() );
     ret->set_parents( parents );
     ret->set_children( children );
 

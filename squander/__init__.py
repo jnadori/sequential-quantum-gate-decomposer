@@ -48,7 +48,9 @@ from squander.gates.gates_Wrapper import (
     CCX,
     CP,
     SWAP,
-    CSWAP
+    CSWAP,
+    CNZ,
+    CNZ_NU
 )
 
 

@@ -1324,6 +1324,42 @@ get_gate( Gates_block* circuit, int &idx ) {
         return py_gate;
 
     }
+    else if (gate->get_type() == N_QUBIT_PHASE_OPERATION) {
+        PyObject* qgd_gate_Dict  = PyModule_GetDict( qgd_gate );
+        PyObject* py_gate_class = PyDict_GetItemString( qgd_gate_Dict, "N_Qubit_Phase");
+        PyObject* gate_input = Py_BuildValue("(O)", qbit_num );
+        py_gate              = PyObject_CallObject(py_gate_class, gate_input);
+        qgd_Gate* py_gate_C = reinterpret_cast<qgd_Gate*>( py_gate );
+        delete( py_gate_C->gate );
+        py_gate_C->gate = static_cast<Gate*>( gate->clone() );
+        Py_DECREF( qgd_gate );
+        Py_DECREF( gate_input );
+    }
+    else if (gate->get_type() == CNZ_NU_OPERATION) {
+        PyObject* qgd_gate_Dict  = PyModule_GetDict( qgd_gate );
+        PyObject* py_gate_class = PyDict_GetItemString( qgd_gate_Dict, "CNZ_NU");
+        PyObject* gate_input = Py_BuildValue("(O)", qbit_num );
+        py_gate              = PyObject_CallObject(py_gate_class, gate_input);
+        qgd_Gate* py_gate_C = reinterpret_cast<qgd_Gate*>( py_gate );
+        delete( py_gate_C->gate );
+        py_gate_C->gate = static_cast<Gate*>( gate->clone() );
+        Py_DECREF( qgd_gate );
+        Py_DECREF( gate_input );
+    }
+    else if (gate->get_type() == CNZ_OPERATION) {
+        // CNZ needs special handling because it requires phase_idx
+        // We'll create a dummy gate with phase_idx=0 and then replace it with the cloned one
+        PyObject* qgd_gate_Dict  = PyModule_GetDict( qgd_gate );
+        PyObject* py_gate_class = PyDict_GetItemString( qgd_gate_Dict, "CNZ");
+        // Create with dummy phase string "0"
+        PyObject* gate_input = Py_BuildValue("(Os)", qbit_num, "0");
+        py_gate              = PyObject_CallObject(py_gate_class, gate_input);
+        qgd_Gate* py_gate_C = reinterpret_cast<qgd_Gate*>( py_gate );
+        delete( py_gate_C->gate );
+        py_gate_C->gate = static_cast<Gate*>( gate->clone() );
+        Py_DECREF( qgd_gate );
+        Py_DECREF( gate_input );
+    }
     else if (gate->get_type() == BLOCK_OPERATION) {
 
         // import gate operation modules

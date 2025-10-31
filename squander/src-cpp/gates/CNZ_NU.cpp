@@ -421,6 +421,7 @@ CNZ_NU* CNZ_NU::clone() {
 
     CNZ_NU* ret = new CNZ_NU( qbit_num );
 
+    ret->set_parameter_start_idx( get_parameter_start_idx() );
     ret->set_parents( parents );
     ret->set_children( children );
 
