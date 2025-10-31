@@ -60,8 +60,6 @@ limitations under the License.
 #include "CNZ_NU.h"
 #include "N_Qubit_Phase_Gate.h"
 #include "Gates_block.h"
-#include "N_Qubit_Permutation.h"
-#include "N_Qubit_Permutation_NU.h"
 #include "custom_kernel_1qubit_gate.h"
 
 
@@ -396,7 +394,8 @@ Gates_block::apply_from_right( Matrix_real& parameters_mtx, Matrix& input ) {
         case CRY_OPERATION: case CR_OPERATION:
         case CRX_OPERATION: case CRZ_OPERATION:
         case CZ_NU_OPERATION: case CP_OPERATION:
-        case ADAPTIVE_OPERATION: case N_QUBIT_PERMUTATION_NU_OPERATION:
+        case ADAPTIVE_OPERATION: 
+
         {
             operation->apply_from_right( parameters_mtx, input );
         }
@@ -1557,56 +1556,6 @@ void Gates_block::add_on_to_front() {
         add_gate_to_front( gate );
 
 }
-/**
-@brief Append a UN gate to the list of gates
-*/
-void Gates_block::add_permutation(std::vector<int> pattern) {
-
-        // create the operation
-        Gate* operation = static_cast<Gate*>(new N_Qubit_Permutation( qbit_num, pattern ));
-
-        // adding the operation to the end of the list of gates
-        add_gate( operation );
-}
-
-/**
-@brief Add a UN gate to the front of the list of gates
-*/
-void Gates_block::add_permutation_to_front(std::vector<int> pattern) {
-
-        // create the operation
-        Gate* gate = static_cast<Gate*>(new N_Qubit_Permutation( qbit_num, pattern ));
-
-        // adding the operation to the front of the list of gates
-        add_gate_to_front( gate );
-
-}
-
-/**
-@brief Append a UN gate to the list of gates
-*/
-void Gates_block::add_permutation_nu() {
-
-        // create the operation
-        Gate* operation = static_cast<Gate*>(new N_Qubit_Permutation_NU( qbit_num ));
-
-        // adding the operation to the end of the list of gates
-        add_gate( operation );
-}
-
-/**
-@brief Add a UN gate to the front of the list of gates
-*/
-void Gates_block::add_permutation_nu_to_front() {
-
-        // create the operation
-        Gate* gate = static_cast<Gate*>(new N_Qubit_Permutation_NU( qbit_num ));
-
-        // adding the operation to the front of the list of gates
-        add_gate_to_front( gate );
-
-}
-
 
 /**
 @brief Append a Composite gate to the list of gates
@@ -2503,7 +2452,6 @@ void Gates_block::set_qbit_num( int qbit_num_in ) {
         case S_OPERATION: case SDG_OPERATION:
         case T_OPERATION: case TDG_OPERATION:
         case CNZ_OPERATION: case N_QUBIT_PHASE_OPERATION:
-        case N_QUBIT_PERMUTATION_NU_OPERATION:
             op->set_qbit_num( qbit_num_in );
             break;
         default:
@@ -2570,7 +2518,7 @@ int Gates_block::extract_gates( Gates_block* op_block ) {
         case CNZ_OPERATION: case N_QUBIT_PHASE_OPERATION:
         case SWAP_OPERATION:
         case CSWAP_OPERATION: case CCX_OPERATION:
-        case N_QUBIT_PERMUTATION_NU_OPERATION:
+
         {
             Gate* op_cloned = op->clone();
             op_block->add_gate( op_cloned );

@@ -25,7 +25,7 @@ limitations under the License.
 #include "common.h"
 #include "dot.h"
 #include "Random_Unitary.h"
-#include "apply_large_kernel_to_input.h"
+#include "apply_dedicated_gate_kernel_to_input.h"
 
 static double M_PIOver2 = M_PI/2;
 /**
@@ -75,6 +75,10 @@ CNZ_NU::CNZ_NU(int qbit_num_in) {
     control_qbit = -1;
     // The number of parameters - single parameter selects which diagonal element is -1
     parameter_num = 1;
+
+    for (int i = 0; i < qbit_num; i++) {
+        target_qbits.push_back(i);
+    }
 
     // Initialize centers for computing distance-based logits
     // Spread centers evenly across [0, 2π]

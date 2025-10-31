@@ -25,7 +25,7 @@ limitations under the License.
 #include "common.h"
 #include "dot.h"
 #include "Random_Unitary.h"
-#include "apply_large_kernel_to_input.h"
+#include "apply_dedicated_gate_kernel_to_input.h"
 
 static double M_PIOver2 = M_PI/2;
 /**
@@ -75,6 +75,10 @@ N_Qubit_Phase_Gate::N_Qubit_Phase_Gate(int qbit_num_in) {
     control_qbit = -1;
     // The number of parameters
     parameter_num = matrix_size;
+
+    for (int i = 0; i < qbit_num; i++) {
+        target_qbits.push_back(i);
+    }
 }
 
 

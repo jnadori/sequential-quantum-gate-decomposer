@@ -1987,6 +1987,48 @@ qgd_N_Qubit_Decomposition_Wrapper_apply_Imported_Gate_Structure(qgd_N_Qubit_Deco
     return Py_BuildValue("i", 0);
 }
 
+/**
+ */
+ static PyObject * qgd_N_Qubit_Decomposition_Wrapper_set_Two_Qubit_Block_Template(qgd_N_Qubit_Decomposition_Wrapper *self, PyObject *args) {
+
+    // initiate variables for input arguments
+    PyObject* gate_structure_py; 
+
+    // parsing input arguments
+    if (!PyArg_ParseTuple(args, "|O", &gate_structure_py )) return Py_BuildValue("i", -1);
+
+
+    // convert gate structure from PyObject to qgd_Circuit_Wrapper
+    qgd_Circuit_Wrapper* qgd_op_block = (qgd_Circuit_Wrapper*) gate_structure_py;
+
+    try {
+        N_Qubit_Decomposition_Tree_Search* tree_search_decomp = dynamic_cast<N_Qubit_Decomposition_Tree_Search*>(self->decomp);
+        if (tree_search_decomp == NULL) {
+            N_Qubit_Decomposition_Tabu_Search* tabu_search_decomp = dynamic_cast<N_Qubit_Decomposition_Tabu_Search*>(self->decomp);
+            if (tabu_search_decomp == NULL) {
+                PyErr_SetString(PyExc_AttributeError, "set_Two_Qubit_Block_Template is only available for N_Qubit_Decomposition_Tree_Search or N_Qubit_Decomposition_Tabu_Search");
+                return NULL;
+            }
+            tabu_search_decomp->set_two_qubit_block_template( qgd_op_block->gate );
+        } else {
+            tree_search_decomp->set_two_qubit_block_template( qgd_op_block->gate );
+        }
+    }
+    catch (std::string err ) {
+        PyErr_SetString(PyExc_Exception, err.c_str());
+        return NULL;
+    }
+    catch(...) {
+        std::string err( "Invalid pointer to decomposition class");
+        PyErr_SetString(PyExc_Exception, err.c_str());
+        return NULL;
+    }
+    
+
+    return Py_BuildValue("i", 0);
+
+
+}
 // ========================================================================= METHODS SHARED ACROSS DECOMP CLASSES
 
 /**
@@ -2987,6 +3029,8 @@ static PyMethodDef qgd_N_Qubit_Decomposition_Tabu_Search_methods[] = {
     DECOMPOSITION_WRAPPER_BASE_METHODS
     {"set_Unitary", (PyCFunction) qgd_N_Qubit_Decomposition_Wrapper_set_Unitary, METH_VARARGS,
      "Call to set unitary matrix"},
+    {"set_Two_Qubit_Block_Template", (PyCFunction) qgd_N_Qubit_Decomposition_Wrapper_set_Two_Qubit_Block_Template, METH_VARARGS,
+     "Set two qubit block template"},
     {NULL}
 };
 
@@ -2997,6 +3041,8 @@ static PyMethodDef qgd_N_Qubit_Decomposition_Tree_Search_methods[] = {
     DECOMPOSITION_WRAPPER_BASE_METHODS
     {"set_Unitary", (PyCFunction) qgd_N_Qubit_Decomposition_Wrapper_set_Unitary, METH_VARARGS,
      "Call to set unitary matrix"},
+    {"set_Two_Qubit_Block_Template", (PyCFunction) qgd_N_Qubit_Decomposition_Wrapper_set_Two_Qubit_Block_Template, METH_VARARGS,
+     "Set two qubit block template"},
     {NULL}
 };
 

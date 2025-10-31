@@ -25,7 +25,7 @@ limitations under the License.
 #include "common.h"
 #include "dot.h"
 #include "Random_Unitary.h"
-#include "apply_large_kernel_to_input.h"
+#include "apply_dedicated_gate_kernel_to_input.h"
 
 static double M_PIOver2 = M_PI/2;
 /**
@@ -76,6 +76,10 @@ CNZ::CNZ(int qbit_num_in, int phase_idx_in) {
     control_qbit = -1;
     // The number of parameters
     parameter_num = 0;
+    for (int i = 0; i < qbit_num; i++) {
+        target_qbits.push_back(i);
+    }
+    
     phase_idx = phase_idx_in;
 }
 
