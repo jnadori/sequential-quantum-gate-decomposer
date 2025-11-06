@@ -213,6 +213,7 @@ qgd_N_Qubit_Decomposition_adaptive_Wrapper_init(qgd_N_Qubit_Decomposition_Wrappe
     }
 }
 
+
 static int 
 qgd_N_Qubit_Decomposition_custom_Wrapper_init(qgd_N_Qubit_Decomposition_Wrapper* self, PyObject* args, PyObject* kwds)
 {
@@ -1792,6 +1793,30 @@ qgd_N_Qubit_Decomposition_Wrapper_Compress_Circuit(qgd_N_Qubit_Decomposition_Wra
 }
 
 /**
+@brief Call to compress circuit with U3 gates
+@note applicable to: Adaptive
+*/
+
+static PyObject *
+qgd_N_Qubit_Decomposition_Wrapper_Compress_Circuit_U3_Gates_PBC(qgd_N_Qubit_Decomposition_Wrapper *self)
+{
+    try {
+        N_Qubit_Decomposition_adaptive* adaptive_decomp = dynamic_cast<N_Qubit_Decomposition_adaptive*>(self->decomp);
+        if (adaptive_decomp == NULL) {
+            PyErr_SetString(PyExc_AttributeError, "compress_circuit_U3_gates_PBC is only available for N_Qubit_Decomposition_adaptive");
+            return NULL;
+        }
+        adaptive_decomp->compress_U3_gates_PBC();
+        Py_RETURN_NONE;
+    } catch (std::exception& e) {
+        PyErr_SetString(PyExc_Exception, e.what());
+        return NULL;
+    }
+}
+
+
+
+/**
 @brief Call to finalize circuit
 @note applicable to: Adaptive
 */
@@ -3011,6 +3036,8 @@ static PyMethodDef qgd_N_Qubit_Decomposition_adaptive_methods[] = {
      "Apply imported gate structure"},
     {"set_Unitary", (PyCFunction) qgd_N_Qubit_Decomposition_Wrapper_set_Unitary, METH_VARARGS,
      "Call to set unitary matrix"},
+    {"Compress_Circuit_U3_Gates_PBC", (PyCFunction) qgd_N_Qubit_Decomposition_Wrapper_Compress_Circuit_U3_Gates_PBC, METH_NOARGS,
+     "Method to compress circuit with U3 gates"},
     {NULL}
 };
 
