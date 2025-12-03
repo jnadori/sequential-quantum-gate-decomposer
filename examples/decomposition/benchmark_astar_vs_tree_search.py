@@ -668,8 +668,8 @@ def main():
     
     # Configuration
     qbit_nums = [3]
-    tree_level_max = 4
-    num_trials = 12 # Number of random unitaries per configuration
+    tree_level_max = 5
+    num_trials = 50 # Number of random unitaries per configuration
     
     # Base configuration
     base_config = {
