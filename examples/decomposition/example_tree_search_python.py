@@ -16,7 +16,10 @@ limitations under the License.
 """
 
 import numpy as np
-from squander.synthesis.tree_search import TreeSearchDecomposition
+from squander.synthesis.tree_search import (
+    TreeSearchDecomposition,
+    AStarSearchDecomposition
+)
 from squander import utils
 
 
@@ -85,10 +88,41 @@ def example_basic_usage():
     print(f"Verification error: {error:.6e}")
 
 
+def example_astar_usage():
+    """Example: 3-qubit QFT solved via A* heuristic search."""
+    print("\n\n" + "="*70)
+    print("Example 2: A* Search with Heuristic Priority Queue")
+    print("="*70)
+
+    N = 3
+    Umtx = generate_qft_matrix(N)
+
+    config = {
+        'tree_level_max': 6,
+        'optimization_tolerance': 1e-6,
+        'optimizer': 'BFGS',
+        'astar_cost_weight': 100.0,
+        'astar_max_expansions': 250,
+    }
+
+    decomposer = AStarSearchDecomposition(
+        Umtx.conj().T,
+        topology=None,
+        config=config,
+        verbose=1
+    )
+
+    result = decomposer.start_decomposition()
+
+    print(f"\nFinal cost: {result['cost']:.6e}")
+    print(f"Best level: {result['level']} CNOT layers")
+    print(f"Optimizer iterations: {result['number_of_iters']}")
+
+
 def example_limited_topology():
     """Example with limited topology (nearest-neighbor only)."""
     print("\n\n" + "="*70)
-    print("Example 2: Tree Search with Limited Topology (Nearest-Neighbor)")
+    print("Example 3: Tree Search with Limited Topology (Nearest-Neighbor)")
     print("="*70)
 
     # Generate target unitary
@@ -130,7 +164,7 @@ def example_limited_topology():
 def example_custom_optimizer():
     """Example using a custom optimizer (simulated annealing)."""
     print("\n\n" + "="*70)
-    print("Example 3: Tree Search with Custom Optimizer (Simulated Annealing)")
+    print("Example 4: Tree Search with Custom Optimizer (Simulated Annealing)")
     print("="*70)
 
     from scipy.optimize import dual_annealing
@@ -177,7 +211,7 @@ def example_custom_optimizer():
 def example_builtin_optimizer():
     """Example using built-in SQUANDER optimizer."""
     print("\n\n" + "="*70)
-    print("Example 4: Tree Search with Built-in SQUANDER Optimizer")
+    print("Example 5: Tree Search with Built-in SQUANDER Optimizer")
     print("="*70)
 
     # Generate target unitary
@@ -215,9 +249,10 @@ def main():
 
     # Run examples
     example_basic_usage()
+    example_astar_usage()
     example_limited_topology()
-    example_builtin_optimizer()
     example_custom_optimizer()
+    example_builtin_optimizer()
 
     print("\n\n" + "="*70)
     print("All examples completed!")
