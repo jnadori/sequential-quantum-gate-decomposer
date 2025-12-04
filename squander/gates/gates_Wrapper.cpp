@@ -28,6 +28,8 @@ along with this program.  If not, see http://www.gnu.org/licenses/.
 
 
 #include <Python.h>
+#include <stdexcept>
+#include <string>
 #include "structmember.h"
 #include "Gate.h"
 #include "CU.h"
@@ -64,6 +66,7 @@ along with this program.  If not, see http://www.gnu.org/licenses/.
 #include "SWAP.h"
 #include "CSWAP.h"
 #include "numpy_interface.h"
+#include "common.h"
 
 
 
@@ -512,16 +515,70 @@ static PyObject *
         PyErr_SetString(PyExc_Exception, err.c_str());
         return NULL;   
     }
-    PyObject* phase_string_py = PyObject_Str(phase_string);
-    PyObject* phase_string_py_unicode = PyUnicode_AsEncodedString(phase_string_py, "utf-8", "~E~");
-    const char* phase_string_C = PyBytes_AS_STRING(phase_string_py_unicode);
-    std::string phase_string_str = ( phase_string_C );
-    int phase_idx = std::stoi(phase_string_str, nullptr, 2); 
+    
     if (qbit_num == -1){
         PyErr_SetString(PyExc_ValueError, "Qubit_num must be set!");
         return NULL;   
     }
-
+    
+    int phase_idx;
+    
+    // Handle default case: if phase_string is None or not provided, default to all 1s
+    if (phase_string == NULL || phase_string == Py_None) {
+        // Default: all qubits in state 1 -> phase_idx = 2^qbit_num - 1
+        phase_idx = (1 << qbit_num) - 1;
+    } else {
+        // Convert Python string to C++ string
+        PyObject* phase_string_py = PyObject_Str(phase_string);
+        if (phase_string_py == NULL) {
+            PyErr_SetString(PyExc_ValueError, "Failed to convert phase_string to string");
+            return NULL;
+        }
+        
+        PyObject* phase_string_py_unicode = PyUnicode_AsEncodedString(phase_string_py, "utf-8", "~E~");
+        Py_DECREF(phase_string_py);
+        
+        if (phase_string_py_unicode == NULL) {
+            PyErr_SetString(PyExc_ValueError, "Failed to encode phase_string");
+            return NULL;
+        }
+        
+        const char* phase_string_C = PyBytes_AS_STRING(phase_string_py_unicode);
+        std::string phase_string_str = phase_string_C;
+        Py_DECREF(phase_string_py_unicode);
+        
+        // Validate that string contains only binary characters (0 and 1)
+        for (char c : phase_string_str) {
+            if (c != '0' && c != '1') {
+                std::string err = "Invalid character in phase_string: '" + std::string(1, c) + "'. Only '0' and '1' are allowed.";
+                PyErr_SetString(PyExc_ValueError, err.c_str());
+                return NULL;
+            }
+        }
+        
+        // Parse binary string to integer with error handling
+        // std::stoi handles leading zeros automatically
+        try {
+            phase_idx = std::stoi(phase_string_str, nullptr, 2);
+        } catch (const std::invalid_argument& e) {
+            PyErr_SetString(PyExc_ValueError, "Invalid phase_string: not a valid binary number");
+            return NULL;
+        } catch (const std::out_of_range& e) {
+            PyErr_SetString(PyExc_ValueError, "phase_string value out of range");
+            return NULL;
+        }
+        
+        // Validate that the parsed value fits in qbit_num bits
+        // phase_idx must be < 2^qbit_num
+        int max_phase_idx = (1 << qbit_num) - 1;
+        if (phase_idx > max_phase_idx) {
+            std::string err = "phase_string value (" + std::to_string(phase_idx) + 
+                            ") exceeds maximum for qbit_num (" + std::to_string(qbit_num) + 
+                            "). Maximum value is " + std::to_string(max_phase_idx);
+            PyErr_SetString(PyExc_ValueError, err.c_str());
+            return NULL;
+        }
+    }
 
     Gate_Wrapper *self;
     self = (Gate_Wrapper *) type->tp_alloc(type, 0);
@@ -626,6 +683,17 @@ Gate_Wrapper_get_Matrix( Gate_Wrapper *self, PyObject *args, PyObject *kwds ) {
 
     }
 
+    // Special handling for CNZ gate: convert column vector to square diagonal matrix
+    if (gate->get_type() == CNZ_OPERATION && gate_mtx.cols == 1) {
+        // CNZ returns a column vector (diagonal elements), convert to square matrix
+        int matrix_size = gate_mtx.rows;
+        Matrix square_matrix = create_identity(matrix_size);
+        // Copy diagonal elements from column vector to square matrix
+        for (int idx = 0; idx < matrix_size; idx++) {
+            square_matrix[idx * matrix_size + idx] = gate_mtx[idx];
+        }
+        gate_mtx = square_matrix;
+    }
 
     // convert to numpy array
     gate_mtx.set_owner(false);
