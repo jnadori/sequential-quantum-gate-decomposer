@@ -51,14 +51,18 @@ class TreeSearchDecomposition:
         
         # Set up topology
         if topology is None:
-            # All-to-all connectivity (excluding self-loops)
+            # All-to-all connectivity (exclude self-loops; CNOT needs distinct qubits)
             self.topology = []
-            for qbit1 in range(self.qbit_num):
-                for qbit2 in range(self.qbit_num):
-                    if qbit1 != qbit2:  # CNOT requires target != control
-                        self.topology.append((qbit1, qbit2))
+            for target in range(self.qbit_num):
+                for control in range(self.qbit_num):
+                    if target == control:
+                        continue
+                    self.topology.append((target, control))
         else:
-            self.topology = topology
+            # Trust caller but guard against invalid entries
+            self.topology = [
+                (t, c) for (t, c) in topology if t != c
+            ]
         
         # Configuration with defaults
         self.config = config.copy() if config else {}

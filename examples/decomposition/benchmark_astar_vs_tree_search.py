@@ -4,6 +4,7 @@ Comprehensive benchmark comparing A* search vs regular tree search decomposition
 
 This script:
 - Generates random circuits for testing (for depth d: d random edges with U3+CNOT, then N U3s)
+- Uses star topology (qubit 0 as center connected to all others)
 - Compares TreeSearchDecomposition vs AStarSearchDecomposition
 - Tests on qubit_num = 3, 4
 - Tests circuit depth up to 15
@@ -16,7 +17,7 @@ import time
 import json
 import os
 from datetime import datetime
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Union
 import matplotlib.pyplot as plt
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 try:
@@ -46,6 +47,28 @@ except ImportError:
         if project_root not in sys.path:
             sys.path.insert(0, project_root)
         from squander.synthesis.tree_search import TreeSearchDecomposition, AStarSearchDecomposition
+
+
+def generate_star_topology(N: int) -> List[Tuple[int, int]]:
+    """
+    Generate star topology for N qubits.
+    
+    In a star topology, qubit 0 is the central qubit connected to all others.
+    Returns bidirectional edges: (center, leaf) and (leaf, center) for each leaf.
+    
+    Args:
+        N: Number of qubits
+        
+    Returns:
+        List of (target, control) qubit pairs representing star topology
+    """
+    topology = []
+    center = 0
+    for leaf in range(1, N):
+        # Add both directions: (center, leaf) and (leaf, center)
+        topology.append((center, leaf))
+        topology.append((leaf, center))
+    return topology
 
 
 def generate_random_circuit_unitary(
@@ -119,10 +142,12 @@ def run_single_trial(
     level: int,
     topology: List[Tuple[int, int]],
     config: Dict,
-    astar_config: Dict
-) -> Tuple[Dict, Dict]:
+    astar_config: Dict,
+    benchmark_tree_search: bool = True,
+    benchmark_astar: bool = True
+) -> Tuple[Optional[Dict], Optional[Dict]]:
     """
-    Run a single trial: generate circuit and run both methods sequentially.
+    Run a single trial: generate circuit and run enabled methods sequentially.
     
     Args:
         trial: Trial number
@@ -131,9 +156,11 @@ def run_single_trial(
         topology: List of (target, control) qubit pairs
         config: Configuration dictionary for tree_search
         astar_config: Configuration dictionary for astar
+        benchmark_tree_search: If False, skip tree_search
+        benchmark_astar: If False, skip astar
         
     Returns:
-        Tuple of (tree_result, astar_result)
+        Tuple of (tree_result, astar_result) - either can be None if disabled
     """
     seed = trial + 1000 * qbit_num + 100 * level
     # Generate random circuit unitary with depth = level
@@ -141,13 +168,19 @@ def run_single_trial(
         qbit_num, level, topology, seed=seed
     )
     
-    # Run both methods sequentially on the same circuit
-    tree_result = run_single_benchmark(
-        Umtx, 'tree_search', qbit_num, level, config, seed=seed
-    )
-    astar_result = run_single_benchmark(
-        Umtx, 'astar', qbit_num, level, astar_config, seed=seed
-    )
+    # Run enabled methods sequentially on the same circuit
+    tree_result = None
+    astar_result = None
+    
+    if benchmark_tree_search:
+        tree_result = run_single_benchmark(
+            Umtx, 'tree_search', qbit_num, level, config, topology=topology, seed=seed
+        )
+    
+    if benchmark_astar:
+        astar_result = run_single_benchmark(
+            Umtx, 'astar', qbit_num, level, astar_config, topology=topology, seed=seed
+        )
     
     return tree_result, astar_result
 
@@ -158,6 +191,7 @@ def run_single_benchmark(
     qbit_num: int,
     tree_level_max: int,
     config: Dict,
+    topology: Optional[List[Tuple[int, int]]] = None,
     seed: Optional[int] = None
 ) -> Dict:
     """
@@ -169,6 +203,7 @@ def run_single_benchmark(
         qbit_num: Number of qubits
         tree_level_max: Maximum tree level to explore
         config: Configuration dictionary
+        topology: List of (target, control) qubit pairs for connectivity constraints
         seed: Random seed
         
     Returns:
@@ -193,14 +228,14 @@ def run_single_benchmark(
         if method == 'tree_search':
             decomposer = TreeSearchDecomposition(
                 Umtx.copy(),
-                topology=None,
+                topology=topology,
                 config=config,
                 verbose=0
             )
         elif method == 'astar':
             decomposer = AStarSearchDecomposition(
                 Umtx.copy(),
-                topology=None,
+                topology=topology,
                 config=config,
                 verbose=0
             )
@@ -255,7 +290,9 @@ def run_benchmark_suite(
     qbit_nums: List[int],
     tree_level_max: int,
     num_trials: int = 5,
-    base_config: Optional[Dict] = None
+    base_config: Optional[Dict] = None,
+    benchmark_tree_search: bool = True,
+    benchmark_astar: bool = True
 ) -> List[Dict]:
     """
     Run full benchmark suite.
@@ -265,6 +302,8 @@ def run_benchmark_suite(
         tree_level_max: Maximum tree level
         num_trials: Number of random unitaries per configuration
         base_config: Base configuration dictionary
+        benchmark_tree_search: If False, skip tree_search benchmarking
+        benchmark_astar: If False, skip astar benchmarking
         
     Returns:
         List of all benchmark results
@@ -310,14 +349,8 @@ def run_benchmark_suite(
             astar_config['astar_cost_weight'] = astar_config.get('astar_cost_weight', 100.0)
             astar_config['astar_max_expansions'] = astar_config.get('astar_max_expansions', None)
             
-            # Generate topology (all-to-all, matching TreeSearchDecomposition default)
-            # This matches what the decomposer will use if topology=None
-            topology = []
-            for qbit1 in range(qbit_num):
-                for qbit2 in range(qbit1 + 1, qbit_num):
-                    # Add both directions: (target, control) pairs
-                    topology.append((qbit1, qbit2))
-                    topology.append((qbit2, qbit1))
+            # Generate star topology (qubit 0 is center, connected to all others)
+            topology = generate_star_topology(qbit_num)
             
             # Parallelize across trials
             # Use ThreadPoolExecutor since C++ code releases GIL
@@ -326,7 +359,7 @@ def run_benchmark_suite(
             
             # Prepare arguments for parallel execution
             trial_args = [
-                (trial, qbit_num, level, topology, config, astar_config)
+                (trial, qbit_num, level, topology, config, astar_config, benchmark_tree_search, benchmark_astar)
                 for trial in range(num_trials)
             ]
             
@@ -344,8 +377,10 @@ def run_benchmark_suite(
                 for future in as_completed(future_to_trial):
                     try:
                         tree_result, astar_result = future.result()
-                        all_results.append(tree_result)
-                        all_results.append(astar_result)
+                        if tree_result is not None:
+                            all_results.append(tree_result)
+                        if astar_result is not None:
+                            all_results.append(astar_result)
                     except Exception as e:
                         trial_num = future_to_trial[future]
                         # Create error results
@@ -661,6 +696,7 @@ def print_summary(stats: Dict):
                           f"{s['mean_time']:.2f} ± {s['std_time']:.2f}  "
                           f"{s['mean_nodes']:.0f}        "
                           f"{s['success_rate']:.1f}%")
+                # If method not in stats, it was disabled - skip silently
 
 
 def main():
@@ -670,6 +706,10 @@ def main():
     qbit_nums = [3]
     tree_level_max = 5
     num_trials = 50 # Number of random unitaries per configuration
+    
+    # Enable/disable specific methods
+    benchmark_tree_search = False  # Set to False to skip tree_search
+    benchmark_astar = True  # Set to False to skip astar
     
     # Base configuration
     base_config = {
@@ -689,7 +729,9 @@ def main():
         qbit_nums=qbit_nums,
         tree_level_max=tree_level_max,
         num_trials=num_trials,
-        base_config=base_config
+        base_config=base_config,
+        benchmark_tree_search=benchmark_tree_search,
+        benchmark_astar=benchmark_astar
     )
     
     # Analyze results
