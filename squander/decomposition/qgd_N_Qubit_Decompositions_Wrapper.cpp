@@ -869,6 +869,24 @@ qgd_N_Qubit_Decomposition_Wrapper_get_Num_of_Iters(qgd_N_Qubit_Decomposition_Wra
 }
 
 /**
+@brief Get the number of nodes (gate structures) evaluated during tree search
+@return The number of nodes evaluated
+@note applicable to: Tree Search only
+*/
+static PyObject *
+qgd_N_Qubit_Decomposition_Wrapper_get_Node_Count(qgd_N_Qubit_Decomposition_Wrapper *self)
+{
+    // Only Tree Search has this method
+    if (N_Qubit_Decomposition_Tree_Search* p = dynamic_cast<N_Qubit_Decomposition_Tree_Search*>(self->decomp)) {
+        int64_t nodes = p->get_Node_Count();
+        return Py_BuildValue("L", nodes);
+    }
+    
+    PyErr_SetString(PyExc_TypeError, "get_Node_Count is only available for Tree Search decomposition");
+    return NULL;
+}
+
+/**
 @brief Export unitary matrix to binary file
 @param args Tuple containing filename string
 @return 0 on success, -1 on error
@@ -3070,6 +3088,8 @@ static PyMethodDef qgd_N_Qubit_Decomposition_Tree_Search_methods[] = {
      "Call to set unitary matrix"},
     {"set_Two_Qubit_Block_Template", (PyCFunction) qgd_N_Qubit_Decomposition_Wrapper_set_Two_Qubit_Block_Template, METH_VARARGS,
      "Set two qubit block template"},
+    {"get_Node_Count", (PyCFunction) qgd_N_Qubit_Decomposition_Wrapper_get_Node_Count, METH_NOARGS,
+     "Get the number of nodes (gate structures) evaluated during tree search"},
     {NULL}
 };
 

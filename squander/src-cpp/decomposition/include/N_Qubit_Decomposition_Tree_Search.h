@@ -60,6 +60,8 @@ protected:
     
     Gates_block* two_qubit_block_template;
     
+    /// Number of nodes (gate structures) evaluated during tree search
+    int64_t nodes_evaluated;
     
 
 public:
@@ -173,6 +175,12 @@ void set_unitary( Matrix& Umtx_new ) ;
 */
 void 
 set_two_qubit_block_template( Gates_block* template_new );
+
+/**
+@brief Get the number of nodes (gate structures) evaluated during tree search
+@return The number of nodes evaluated
+*/
+int64_t get_Node_Count() const;
 
 
 /** 

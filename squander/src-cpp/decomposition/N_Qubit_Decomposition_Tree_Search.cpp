@@ -72,7 +72,7 @@ N_Qubit_Decomposition_Tree_Search::N_Qubit_Decomposition_Tree_Search() : Optimiz
     }
     
     custom_blocks = false;
-    
+    nodes_evaluated = 0;
 
 
 
@@ -120,6 +120,8 @@ N_Qubit_Decomposition_Tree_Search::N_Qubit_Decomposition_Tree_Search( Matrix Umt
         }
     }
     custom_blocks = false;
+    nodes_evaluated = 0;
+    
     // construct the possible CNOT combinations within a single level
     // the number of possible CNOT connections netween the qubits (including topology constraints)
     int n_ary_limit_max = topology.size();
@@ -210,6 +212,7 @@ N_Qubit_Decomposition_Tree_Search::N_Qubit_Decomposition_Tree_Search( Matrix Umt
         max_outer_iterations = 1;
     }
     custom_blocks = false;
+    nodes_evaluated = 0;
 
 }
 
@@ -333,6 +336,9 @@ N_Qubit_Decomposition_Tree_Search::determine_gate_structure(Matrix_real& optimiz
         throw error;      
     }
 
+    // Reset node counter at the start of decomposition
+    nodes_evaluated = 0;
+
     GrayCode gcode_best_solution;
     double minimum_best_solution  = current_minimum; 
 
@@ -405,6 +411,7 @@ N_Qubit_Decomposition_Tree_Search::tree_search_over_gate_structures( int level_n
         N_Qubit_Decomposition_custom&& cDecomp_custom_random = perform_optimization( gate_structure_loc );
 
         number_of_iters += cDecomp_custom_random.get_num_iters(); // retrive the number of iterations spent on optimization           
+        nodes_evaluated += 1; // Count this node (level 0 - empty structure)
 
 
         double current_minimum_tmp         = cDecomp_custom_random.get_current_minimum();
@@ -506,6 +513,7 @@ N_Qubit_Decomposition_Tree_Search::tree_search_over_gate_structures( int level_n
         
                 
                 number_of_iters += cDecomp_custom_random.get_num_iters(); // retrive the number of iterations spent on optimization  
+                nodes_evaluated += 1; // Count this node (gate structure) as evaluated
     
                 double current_minimum_tmp         = cDecomp_custom_random.get_current_minimum();
                 sstream.str("");
@@ -773,6 +781,15 @@ block->add_rz(idx); */
 }
 
 
+
+/**
+@brief Get the number of nodes (gate structures) evaluated during tree search
+@return The number of nodes evaluated
+*/
+int64_t 
+N_Qubit_Decomposition_Tree_Search::get_Node_Count() const {
+    return nodes_evaluated;
+}
 
 /**
 @brief call to set Unitary from mtx
