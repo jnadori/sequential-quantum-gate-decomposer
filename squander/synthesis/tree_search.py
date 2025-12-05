@@ -91,6 +91,7 @@ class TreeSearchDecomposition:
         self.best_final_circuit = None  # Store the final (flattened) circuit structure
         self.best_gate_structure = None  # Store the original hierarchical gate structure
         self.number_of_iters = 0
+        self.nodes_evaluated = 0
         
         # Multiprocessing
         self.n_processes = self.config.get('n_processes', mp.cpu_count())
@@ -119,8 +120,10 @@ class TreeSearchDecomposition:
             - parameters: np.ndarray (optimized parameters)
             - total_time: float
             - number_of_iters: int
+            - nodes_evaluated: int
         """
         start_time = time.time()
+        self.nodes_evaluated = 0  # Reset node counter
         
         if self.verbose >= 1:
             print(f"\nStarting tree search decomposition for {self.qbit_num}-qubit matrix")
@@ -136,7 +139,8 @@ class TreeSearchDecomposition:
                 print(f"{'='*70}")
             
             # Perform tree search at this level
-            gray_code, cost, parameters = self.tree_search_over_gate_structures(level)
+            gray_code, cost, parameters, nodes_at_level = self.tree_search_over_gate_structures(level)
+            self.nodes_evaluated += nodes_at_level
             
             # Update best solution
             if cost < minimum_best_solution:
@@ -175,7 +179,8 @@ class TreeSearchDecomposition:
             'gray_code': self.best_gray_code,
             'parameters': self.best_parameters,
             'total_time': total_time,
-            'number_of_iters': self.number_of_iters
+            'number_of_iters': self.number_of_iters,
+            'nodes_evaluated': self.nodes_evaluated
         }
         
         if self.verbose >= 1:
@@ -184,6 +189,7 @@ class TreeSearchDecomposition:
             print(f"  Success: {result['success']}")
             print(f"  Final cost: {result['cost']:.6e}")
             print(f"  Best level: {result['level']}")
+            print(f"  Nodes evaluated: {result['nodes_evaluated']}")
             print(f"  Total time: {result['total_time']:.1f}s")
             print(f"  Total iterations: {result['number_of_iters']}")
             print(f"{'='*70}\n")
@@ -193,7 +199,7 @@ class TreeSearchDecomposition:
     def tree_search_over_gate_structures(
         self,
         level_num: int
-    ) -> Tuple[List[int], float, np.ndarray]:
+    ) -> Tuple[List[int], float, np.ndarray, int]:
         """
         Perform tree search over gate structures for a given level.
         
@@ -201,11 +207,12 @@ class TreeSearchDecomposition:
             level_num: Number of CNOT layers (tree depth)
         
         Returns:
-            Tuple of (best_gray_code, best_cost, best_parameters)
+            Tuple of (best_gray_code, best_cost, best_parameters, nodes_evaluated)
         """
         # Handle level 0 (no two-qubit gates)
         if level_num == 0:
-            return self._optimize_empty_gate_structure()
+            gray_code, cost, params = self._optimize_empty_gate_structure()
+            return (gray_code, cost, params, 1)  # 1 node evaluated (empty structure)
         
         # Set up parallel search
         n_ary_limit_max = len(self.topology)
@@ -261,12 +268,14 @@ class TreeSearchDecomposition:
         best_gray_code = None
         best_params = None
         total_iters = 0
+        total_nodes = 0
         
         for result in results:
             if result is None:
                 continue
-            iters, cost, gray_code, params = result
+            iters, cost, gray_code, params, nodes = result
             total_iters += iters
+            total_nodes += nodes
             if cost < best_cost:
                 best_cost = cost
                 best_gray_code = gray_code
@@ -287,10 +296,10 @@ class TreeSearchDecomposition:
             self._sync_best_decomposition(best_gray_code, best_params, best_cost)
         
         if best_gray_code is not None:
-            return (best_gray_code, best_cost, best_params)
+            return (best_gray_code, best_cost, best_params, total_nodes)
         else:
             # Fallback if no solution found
-            return ([], float('inf'), np.array([]))
+            return ([], float('inf'), np.array([]), total_nodes)
     
     def _optimize_empty_gate_structure(self) -> Tuple[List[int], float, np.ndarray]:
         """Optimize empty gate structure (level 0 - no two-qubit gates)."""
@@ -856,7 +865,7 @@ def _tree_search_worker(
     config: Dict,
     optimization_tolerance: float,
     verbose: int
-) -> Optional[Tuple[int, float, List[int], np.ndarray]]:
+) -> Optional[Tuple[int, float, List[int], np.ndarray, int]]:
     """
     Worker function for parallel tree search.
     
@@ -873,7 +882,7 @@ def _tree_search_worker(
         verbose: Verbosity level
     
     Returns:
-        Tuple of (num_iterations, best_cost, best_gray_code, best_params) or None if no solution
+        Tuple of (num_iterations, best_cost, best_gray_code, best_params, nodes_evaluated) or None if no solution
     """
     import numpy as np
     
@@ -886,6 +895,7 @@ def _tree_search_worker(
     local_best_gray_code = None
     local_best_params = None
     total_iters = 0
+    nodes_evaluated = 0
     
     # Import here to avoid pickling issues
     from squander.synthesis.circuit_builder import construct_gate_structure_from_gray_code
@@ -924,6 +934,7 @@ def _tree_search_worker(
             )
             
             total_iters += 1  # Approximate iteration count
+            nodes_evaluated += 1  # Count this node as evaluated
             
             # Update local best
             if cost < local_best_cost:
@@ -949,7 +960,7 @@ def _tree_search_worker(
                 break
     
     if local_best_gray_code is not None:
-        return (total_iters, local_best_cost, local_best_gray_code, local_best_params)
+        return (total_iters, local_best_cost, local_best_gray_code, local_best_params, nodes_evaluated)
     else:
         return None
 
