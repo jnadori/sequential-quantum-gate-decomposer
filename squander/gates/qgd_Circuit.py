@@ -90,9 +90,7 @@ class qgd_Circuit(qgd_Circuit_Wrapper):
 
     def __new__(cls, *args, **kwargs):
 
-        print( "NEEEEEEEEEEEEEW", args)
         return super().__new__(cls, *args, **kwargs)
-    """
 
     def __copy__(self):
         """
@@ -296,14 +294,14 @@ class qgd_Circuit(qgd_Circuit_Wrapper):
 
 	# call the C wrapper function
         super().add_Phase_Gate()
-
-
-#@brief Call to add a S gate to the front of the gate structure.
-#@param self A pointer pointing to an instance of the class qgd_Circuit.
-#@param Input arguments: target_qbit (int).
-
+    #@brief Call to add a S gate to the front of the gate structure.
+    #@param self A pointer pointing to an instance of the class qgd_Circuit.
+    #@param Input arguments: target_qbit (int).
+   
+    def add_S(self,target_qbit):
+        """
         Args:
-            target_qbit: Target qubit index (int)
+        target_qbit: Target qubit index (int)
         """
 
         # call the C wrapper function

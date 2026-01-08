@@ -248,7 +248,6 @@ static inline LevelResult enumerate_unordered_cnot_BFS_level_step(LevelInfo& L,
                 // build sequences
                 GrayCode seqp = last_pairs.add_Digit(static_cast<int>(topology.size()));
                 seqp[seqp.size() - 1] = p;
-    custom_blocks = false;
 
                 new_seq_pairs_of.emplace(B, std::move(seqp));
 
@@ -287,43 +286,7 @@ N_Qubit_Decomposition_Tree_Search::N_Qubit_Decomposition_Tree_Search() : Optimiz
         // Maximal number of iterations in the optimization process
         max_outer_iterations = 1;
     }
-<<<<<<<
-
-    if( topology.size() == 0 ) {
-        for( int qbit1=0; qbit1<qbit_num; qbit1++ ) {
-            for( int qbit2=qbit1; qbit2<qbit_num; qbit2++ ) {
-                matrix_base<int> edge(2,1);
-                edge[0] = qbit1;
-                edge[1] = qbit2;
-
-                topology.push_back( edge );
-            }
-        }
-    }
     custom_blocks = false;
-    nodes_evaluated = 0;
-    
-    // construct the possible CNOT combinations within a single level
-    // the number of possible CNOT connections netween the qubits (including topology constraints)
-    int n_ary_limit_max = topology.size();
-    
-    possible_target_qbits = matrix_base<int>(1, n_ary_limit_max);
-    possible_control_qbits = matrix_base<int>(1, n_ary_limit_max);    
-    for( int element_idx = 0; element_idx<n_ary_limit_max; element_idx++ ) {
-
-       matrix_base<int>& edge = topology[ element_idx ];
-       possible_target_qbits[element_idx] = edge[0];
-       possible_control_qbits[element_idx] = edge[1]; 
- 
-    }   
-
-
-
-
-
-=======
-
->>>>>>>
 }
 
 /**
@@ -1157,11 +1120,6 @@ void N_Qubit_Decomposition_Tree_Search::add_two_qubit_block(Gates_block* gate_st
     else{
             Gates_block* layer = new Gates_block( qbit_num );
 
-
-/*
-layer->add_rz(target_qbit);
-layer->add_ry(target_qbit);
-layer->add_rz(target_qbit);     
     if (control_qbit >= qbit_num || target_qbit >= qbit_num) {
         std::string error("N_Qubit_Decomposition_Tree_Search::add_two_qubit_block: Label of control/target qubit "
                           "should be less than the number of qubits in the register.");
