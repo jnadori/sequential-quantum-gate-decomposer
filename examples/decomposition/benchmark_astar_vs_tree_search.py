@@ -34,7 +34,7 @@ except ImportError:
 
 # Import tree search classes
 try:
-    from squander.synthesis.tree_search import TreeSearchDecomposition, AStarSearchDecomposition
+    from squander.synthesis.tree_search_old.tree_search import TreeSearchDecomposition, AStarSearchDecomposition
 except ImportError:
     try:
         # Fallback: try importing from squander.synthesis
@@ -46,7 +46,7 @@ except ImportError:
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
         if project_root not in sys.path:
             sys.path.insert(0, project_root)
-        from squander.synthesis.tree_search import TreeSearchDecomposition, AStarSearchDecomposition
+        from squander.synthesis.tree_search_old.tree_search import TreeSearchDecomposition, AStarSearchDecomposition
 
 
 def generate_star_topology(N: int) -> List[Tuple[int, int]]:

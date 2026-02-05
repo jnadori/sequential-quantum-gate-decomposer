@@ -16,7 +16,7 @@ limitations under the License.
 """
 
 import numpy as np
-from squander.synthesis.tree_search import (
+from squander.synthesis.tree_search_old.tree_search import (
     TreeSearchDecomposition,
     AStarSearchDecomposition
 )

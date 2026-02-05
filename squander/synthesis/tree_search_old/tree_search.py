@@ -14,8 +14,8 @@ from typing import List, Tuple, Optional, Dict, Any
 import multiprocessing as mp
 import numpy as np
 
-from squander.synthesis.gray_code import NaryGrayCodeCounter
-from squander.synthesis.circuit_builder import construct_gate_structure_from_gray_code
+from squander.synthesis.tree_search_old.gray_code import NaryGrayCodeCounter
+from squander.synthesis.tree_search_old.circuit_builder import construct_gate_structure_from_gray_code
 
 
 class TreeSearchDecomposition:
@@ -303,7 +303,7 @@ class TreeSearchDecomposition:
     
     def _optimize_empty_gate_structure(self) -> Tuple[List[int], float, np.ndarray]:
         """Optimize empty gate structure (level 0 - no two-qubit gates)."""
-        from squander.synthesis.circuit_builder import add_finalizing_layer
+        from squander.synthesis.tree_search_old.circuit_builder import add_finalizing_layer
         from squander.gates.qgd_Circuit import qgd_Circuit as Circuit
         
         # Create circuit with only finalizing layer
@@ -339,7 +339,7 @@ class TreeSearchDecomposition:
             cost: Cost achieved by workers (used as target)
         """
         from squander import N_Qubit_Decomposition_custom
-        from squander.synthesis.circuit_builder import add_finalizing_layer
+        from squander.synthesis.tree_search_old.circuit_builder import add_finalizing_layer
         from squander.gates.qgd_Circuit import qgd_Circuit as Circuit
         
         # Reconstruct gate structure from Gray code
@@ -376,57 +376,50 @@ class TreeSearchDecomposition:
                 )
             
             decomp = N_Qubit_Decomposition_custom(
-                self.Umtx.conj().T,
+                self.Umtx,
                 qbit_num=self.qbit_num,
                 initial_guess="random",
                 config=self.config
             )
-            
+
             decomp.set_Gate_Structure(gate_structure_trial)
-            
-            # Count layers for optimization blocks
-            gates = gate_structure_trial.get_Gates()
-            num_layers = sum(1 for gate in gates if hasattr(gate, 'get_Gates'))
-            if num_layers == 0:
-                num_layers = 1
-            decomp.set_Optimization_Blocks(num_layers)
-            
+
             decomp.set_Verbose(0)
             decomp.set_Cost_Function_Variant(costfnc=self.cost_function_variant)
             decomp.set_Optimization_Tolerance(self.optimization_tolerance)
             decomp.set_Optimizer(optimizer=self.optimizer)
-            
+
             # Run optimization
             decomp.Start_Decomposition()
-            
+
             # Get results for this trial
             trial_params = decomp.get_Optimized_Parameters()
             trial_cost = decomp.Optimization_Problem(trial_params)
-            
+
             if trial_cost < best_cost_found:
                 best_cost_found = trial_cost
                 best_decomp = decomp
-                
+
                 # Early stopping if we reached tolerance
                 if trial_cost < self.optimization_tolerance:
                     break
-        
+
         if best_decomp is None:
             # Fallback - shouldn't happen
             best_decomp = decomp
             best_cost_found = trial_cost
-        
+
         # Get the final circuit and parameters from best restart
         final_circuit = best_decomp.get_Circuit()
         final_params = best_decomp.get_Optimized_Parameters()
-        
+
         # Store the results
         self.best_decomposition = best_decomp
         self.best_gate_structure = final_circuit
         self.best_parameters = final_params.copy()
         self.best_gray_code = gray_code.copy() if gray_code else []
         self.current_minimum = best_cost_found
-    
+
     def _perform_optimization(
         self,
         gate_structure
@@ -449,31 +442,19 @@ class TreeSearchDecomposition:
     def _optimize_cpp(self, gate_structure) -> Tuple[float, np.ndarray]:
         """Optimize using C++ optimizer."""
         from squander import N_Qubit_Decomposition_custom
-        
+
         # Create decomposition instance
+        # self.Umtx is already Umtx.conj().T as passed by the user (standard convention)
         decomp = N_Qubit_Decomposition_custom(
-            self.Umtx.conj().T,
+            self.Umtx,
             qbit_num=self.qbit_num,
             initial_guess="random",
             config=self.config
         )
-        
+
         # Set custom gate structure
         decomp.set_Gate_Structure(gate_structure)
-        
-        # Configure optimization
-        # get_gate_num() in C++ returns number of layers (sub-circuits), not total gates
-        # Count the number of layers (sub-circuits) in the gate structure
-        gates = gate_structure.get_Gates()
-        num_layers = sum(1 for gate in gates if hasattr(gate, 'get_Gates'))  # Count Circuit objects (layers)
-        if num_layers == 0:
-            num_layers = 1  # At least one layer
-        decomp.set_Optimization_Blocks(num_layers)
-        
-        # Note: set_Max_Iterations() sets INNER iterations, not outer iterations
-        # Outer iterations default to 4 for BFGS (qbit_num <= 5) or 1 for ADAM (qbit_num > 5)
-        # and can be set via config if needed, but there's no direct Python method for it
-        
+
         decomp.set_Verbose(self.verbose if self.verbose <= 1 else 1)
         decomp.set_Cost_Function_Variant(costfnc=self.cost_function_variant)
         decomp.set_Optimization_Tolerance(self.optimization_tolerance)
@@ -532,18 +513,12 @@ class TreeSearchDecomposition:
             # This matches what the optimization actually optimized
             try:
                 temp_decomp = N_Qubit_Decomposition_custom(
-                    self.Umtx.conj().T,
+                    self.Umtx,
                     qbit_num=self.qbit_num,
                     initial_guess="random",
                     config=self.config
                 )
                 temp_decomp.set_Gate_Structure(gate_structure)
-                # Count layers for optimization blocks
-                gates = gate_structure.get_Gates()
-                num_layers = sum(1 for gate in gates if hasattr(gate, 'get_Gates'))
-                if num_layers == 0:
-                    num_layers = 1
-                temp_decomp.set_Optimization_Blocks(num_layers)
                 temp_decomp.set_Cost_Function_Variant(costfnc=self.cost_function_variant)
                 # Use full parameters with original structure for cost calculation
                 # This gives us the actual optimized cost
@@ -567,9 +542,9 @@ class TreeSearchDecomposition:
                 elif len(parameters) < final_param_num:
                     parameters = np.pad(parameters, (0, final_param_num - len(parameters)), 'constant')
             cost = decomp.Optimization_Problem(parameters)
-        
+
         self.number_of_iters += num_iters
-        
+
         # IMPORTANT: Store and return the FULL parameters (45 for depth 6: 6*6 + 3*3)
         # that match the ORIGINAL hierarchical structure. The optimization was done with
         # the hierarchical structure, so those are the correct parameters to store.
@@ -632,7 +607,7 @@ class TreeSearchDecomposition:
         
         # Last resort: Reconstruct from Gray code
         if self.best_gray_code is None or len(self.best_gray_code) == 0:
-            from squander.synthesis.circuit_builder import add_finalizing_layer
+            from squander.synthesis.tree_search_old.circuit_builder import add_finalizing_layer
             from squander.gates.qgd_Circuit import qgd_Circuit as Circuit
             
             gate_structure = Circuit(self.qbit_num)
@@ -705,7 +680,7 @@ class AStarSearchDecomposition(TreeSearchDecomposition):
 
         previous_best = self.current_minimum
         try:
-            root_cost, _ = self._evaluate_gray_code([])
+            root_cost, root_params = self._evaluate_gray_code([])
         except ValueError as exc:
             raise RuntimeError(f"Failed to evaluate root gate structure: {exc}") from exc
         nodes_evaluated += 1
@@ -716,6 +691,7 @@ class AStarSearchDecomposition(TreeSearchDecomposition):
         if root_cost + self.astar_cost_epsilon < previous_best:
             # Explicitly record that the empty structure is the current best
             self.current_minimum = root_cost
+            self.best_parameters = root_params
 
         heapq.heappush(
             priority_queue,
@@ -746,7 +722,7 @@ class AStarSearchDecomposition(TreeSearchDecomposition):
                 child_code = list(current_key) + [edge_idx]
                 previous_best = self.current_minimum
                 try:
-                    cost, _ = self._evaluate_gray_code(child_code)
+                    cost, params = self._evaluate_gray_code(child_code)
                 except ValueError as exc:
                     if self.verbose >= 2:
                         print(
@@ -758,6 +734,7 @@ class AStarSearchDecomposition(TreeSearchDecomposition):
                 if cost + self.astar_cost_epsilon < previous_best:
                     self.current_minimum = cost
                     self.best_gray_code = child_code.copy()
+                    self.best_parameters = params
 
                     if self.verbose >= 2:
                         print(
@@ -898,7 +875,7 @@ def _tree_search_worker(
     nodes_evaluated = 0
     
     # Import here to avoid pickling issues
-    from squander.synthesis.circuit_builder import construct_gate_structure_from_gray_code
+    from squander.synthesis.tree_search_old.circuit_builder import construct_gate_structure_from_gray_code
     
     # Iterate over assigned range
     iter_idx = start_idx
@@ -978,26 +955,19 @@ def _optimize_structure(
     optimizer_name = config.get('optimizer', 'BFGS')
     
     # Create decomposition instance
+    # Umtx is already Umtx.conj().T as passed by the caller (standard convention)
     decomp = N_Qubit_Decomposition_custom(
-        Umtx.conj().T,
+        Umtx,
         qbit_num=qbit_num,
         initial_guess="random",
         config=config
     )
-    
+
     decomp.set_Gate_Structure(gate_structure)
-    # Count the number of layers (sub-circuits) in the gate structure
-    gates = gate_structure.get_Gates()
-    num_layers = sum(1 for gate in gates if hasattr(gate, 'get_Gates'))  # Count Circuit objects (layers)
-    if num_layers == 0:
-        num_layers = 1  # At least one layer
-    decomp.set_Optimization_Blocks(num_layers)
     decomp.set_Verbose(0)  # Reduce verbosity in workers
     decomp.set_Cost_Function_Variant(costfnc=config.get('cost_function_variant', 3))
     decomp.set_Optimization_Tolerance(config.get('optimization_tolerance', 1e-8))
     decomp.set_Optimizer(optimizer=optimizer_name)
-    
-    # Set optimizer-specific INNER iteration parameters
     # set_Max_Iterations() sets max_inner_iterations, not max_outer_iterations
     max_inner_iters = config.get('max_inner_iterations', None)
     if optimizer_name in ['ADAM', 'BFGS2']:
@@ -1038,17 +1008,12 @@ def _optimize_structure(
         # Calculate cost with original structure and full parameters
         try:
             temp_decomp = N_Qubit_Decomposition_custom(
-                Umtx.conj().T,
+                Umtx,
                 qbit_num=qbit_num,
                 initial_guess="random",
                 config=config
             )
             temp_decomp.set_Gate_Structure(gate_structure)
-            gates = gate_structure.get_Gates()
-            num_layers = sum(1 for gate in gates if hasattr(gate, 'get_Gates'))
-            if num_layers == 0:
-                num_layers = 1
-            temp_decomp.set_Optimization_Blocks(num_layers)
             temp_decomp.set_Cost_Function_Variant(costfnc=config.get('cost_function_variant', 3))
             # Use full parameters with original structure for cost calculation
             cost = temp_decomp.Optimization_Problem(params)
@@ -1071,3 +1036,492 @@ def _optimize_structure(
         cost = decomp.Optimization_Problem(params)
     
     return (cost, params)
+
+
+class ApproximateTreeSearchDecomposition(TreeSearchDecomposition):
+    """
+    Approximate Tree search decomposition for quantum circuit synthesis.
+
+    This class implements a new method where the theorethical maximum fidelity is taken into account at a given circuit depth.
+    """
+    
+    def __init__(
+        self,
+        Umtx: np.ndarray,
+        topology: Optional[List[Tuple[int, int]]] = None,
+        layer_fidelity: float = 0.995,
+        minimal_error: float = 1e-1,
+        config: Optional[Dict[str, Any]] = None,
+        verbose: int = 1
+    ):
+        super().__init__(
+            Umtx=Umtx,
+            topology=topology,
+            config=config,
+            verbose=verbose,
+            search_name="Approximate Search Decomposition"
+        )
+        self.layer_fidelity = layer_fidelity
+        self.minimal_error = minimal_error
+
+    def start_decomposition(self) -> Dict[str, Any]:
+        """
+        Start tree search decomposition with adaptive tolerance.
+
+        Returns:
+            Dictionary with results
+        """
+        start_time = time.time()
+        self.nodes_evaluated = 0  # Reset node counter
+
+        if self.verbose >= 1:
+            print(f"\nStarting approximate tree search for {self.qbit_num}-qubit matrix")
+            print(f"Layer fidelity: {self.layer_fidelity}")
+            print(f"Minimal error: {self.minimal_error}")
+
+        best_solution = None
+        minimum_best_solution = float('inf')
+
+        # Iterate over levels from 0 to tree_level_max
+        for level in range(0, self.tree_level_max + 1):
+            adaptive_tolerance = self.calculate_tolerance(level)
+
+            if self.verbose >= 1:
+                print(f"\n{'='*70}")
+                print(f"Exploring level {level}/{self.tree_level_max}")
+                print(f"Adaptive tolerance: {adaptive_tolerance:.6e}")
+                print(f"{'='*70}")
+
+            # Perform tree search at this level
+            gray_code, cost, parameters, nodes_at_level = self.tree_search_over_gate_structures(level)
+            self.nodes_evaluated += nodes_at_level
+
+            # Update best solution
+            if cost < minimum_best_solution:
+                minimum_best_solution = cost
+                best_solution = {
+                    'gray_code': gray_code,
+                    'cost': cost,
+                    'parameters': parameters,
+                    'level': level
+                }
+                self.current_minimum = cost
+                self.best_gray_code = gray_code
+                self.best_parameters = parameters
+
+            if self.verbose >= 1:
+                print(f"Level {level} best cost: {cost:.6e}")
+                print(f"Overall best cost: {minimum_best_solution:.6e}")
+
+            # Early stopping with adaptive tolerance
+            if self.current_minimum < adaptive_tolerance:
+                if self.verbose >= 1:
+                    print(f"\nAdaptive tolerance {adaptive_tolerance:.6e} reached at level {level}")
+                break
+
+        total_time = time.time() - start_time
+
+        # Prepare results
+        if best_solution is None:
+            raise RuntimeError("No solution found in approximate tree search")
+
+        # Success is determined by the adaptive tolerance for the final level
+        final_tolerance = self.calculate_tolerance(best_solution['level'])
+
+        result = {
+            'success': self.current_minimum < final_tolerance,
+            'cost': self.current_minimum,
+            'level': best_solution['level'],
+            'gray_code': self.best_gray_code,
+            'parameters': self.best_parameters,
+            'total_time': total_time,
+            'number_of_iters': self.number_of_iters,
+            'nodes_evaluated': self.nodes_evaluated
+        }
+
+        if self.verbose >= 1:
+            print(f"\n{'='*70}")
+            print("Approximate Tree Search Results:")
+            print(f"  Success: {result['success']}")
+            print(f"  Final cost: {result['cost']:.6e}")
+            print(f"  Best level: {result['level']}")
+            print(f"  Adaptive tolerance: {final_tolerance:.6e}")
+            print(f"  Nodes evaluated: {result['nodes_evaluated']}")
+            print(f"  Total time: {result['total_time']:.1f}s")
+            print(f"  Total iterations: {result['number_of_iters']}")
+            print(f"{'='*70}\n")
+
+        return result
+
+    def tree_search_over_gate_structures(
+        self,
+        level_num: int
+    ) -> Tuple[List[int], float, np.ndarray, int]:
+        """
+        Perform tree search over gate structures for a given level.
+        
+        Args:
+            level_num: Number of CNOT layers (tree depth)
+        
+        Returns:
+            Tuple of (best_gray_code, best_cost, best_parameters, nodes_evaluated)
+        """
+        # Handle level 0 (no two-qubit gates)
+        if level_num == 0:
+            gray_code, cost, params = self._optimize_empty_gate_structure()
+            return (gray_code, cost, params, 1)  # 1 node evaluated (empty structure)
+        
+        # Set up parallel search
+        n_ary_limit_max = len(self.topology)
+        iteration_max = n_ary_limit_max ** level_num
+        
+        if self.verbose >= 2:
+            print(f"  Total combinations to explore: {iteration_max}")
+        
+        # Divide work among processes
+        n_workers = min(self.n_processes, iteration_max)
+        work_per_worker = iteration_max // n_workers
+        
+        # Create work ranges
+        work_ranges = []
+        for i in range(n_workers):
+            start_idx = i * work_per_worker
+            if i == n_workers - 1:
+                end_idx = iteration_max
+            else:
+                end_idx = (i + 1) * work_per_worker
+            work_ranges.append((start_idx, end_idx))
+        
+        # Create worker function arguments (ensure parallel=0 in worker configs too)
+        worker_config = self.config.copy()
+        worker_config['parallel'] = 0
+        worker_config['optimization_tolerance'] = self.calculate_tolerance(level_num)
+        
+        worker_args = [
+            (
+                start_idx,
+                end_idx,
+                self.Umtx.copy(),
+                self.qbit_num,
+                self.topology,
+                level_num,
+                n_ary_limit_max,
+                worker_config,
+                self.calculate_tolerance(level_num),
+                self.verbose
+            )
+            for start_idx, end_idx in work_ranges
+        ]
+        
+        # Execute parallel search
+        if n_workers > 1:
+            with mp.Pool(n_workers) as pool:
+                results = pool.starmap(_tree_search_worker, worker_args)
+        else:
+            # Single process - no overhead
+            results = [_tree_search_worker(*args) for args in worker_args]
+        
+        # Collect results and find best
+        best_cost = float('inf')
+        best_gray_code = None
+        best_params = None
+        total_iters = 0
+        total_nodes = 0
+        
+        for result in results:
+            if result is None:
+                continue
+            iters, cost, gray_code, params, nodes = result
+            total_iters += iters
+            total_nodes += nodes
+            if cost < best_cost:
+                best_cost = cost
+                best_gray_code = gray_code
+                best_params = params
+        
+        self.number_of_iters += total_iters
+        
+        # Check if we found optimal solution
+        if best_cost < self.calculate_tolerance(level_num):
+            if self.verbose >= 1:
+                print(f"  Optimal solution found: cost = {best_cost:.6e}")
+
+        if best_gray_code is not None and best_cost < self.current_minimum:
+            self._sync_best_decomposition(best_gray_code, best_params, best_cost)
+        
+        if best_gray_code is not None:
+            return (best_gray_code, best_cost, best_params, total_nodes)
+        else:
+            # Fallback if no solution found
+            return ([], float('inf'), np.array([]), total_nodes)
+    
+    def _optimize_empty_gate_structure(self) -> Tuple[List[int], float, np.ndarray]:
+        """Optimize empty gate structure (level 0 - no two-qubit gates)."""
+        from squander.synthesis.tree_search_old.circuit_builder import add_finalizing_layer
+        from squander.gates.qgd_Circuit import qgd_Circuit as Circuit
+        
+        # Create circuit with only finalizing layer
+        gate_structure = Circuit(self.qbit_num)
+        add_finalizing_layer(gate_structure, self.qbit_num)
+        
+        # Optimize
+        cost, parameters = self._perform_optimization(gate_structure)
+        
+        if cost < self.current_minimum:
+            self.current_minimum = cost
+            self.best_parameters = parameters
+        
+        return ([], cost, parameters)
+    
+    def _sync_best_decomposition(
+        self,
+        gray_code: List[int],
+        parameters: np.ndarray,
+        cost: float
+    ):
+        """
+        Synchronize best solution state with results from worker processes.
+        
+        Workers can't pass back circuit objects (they can't be pickled), so
+        we must re-run the optimization in the main process to get the correct
+        circuit-parameter pairing. We run multiple random restarts since the
+        optimization is non-convex and can get stuck in local minima.
+        
+        Args:
+            gray_code: Best Gray code from workers
+            parameters: Optimized parameters from workers (not used directly)
+            cost: Cost achieved by workers (used as target)
+        """
+        from squander import N_Qubit_Decomposition_custom
+        from squander.synthesis.tree_search_old.circuit_builder import add_finalizing_layer
+        from squander.gates.qgd_Circuit import qgd_Circuit as Circuit
+        
+        # Reconstruct gate structure from Gray code
+        if len(gray_code) == 0:
+            gate_structure = Circuit(self.qbit_num)
+            add_finalizing_layer(gate_structure, self.qbit_num)
+        else:
+            gate_structure = construct_gate_structure_from_gray_code(
+                gray_code,
+                self.topology,
+                self.qbit_num
+            )
+                
+        best_decomp = None
+        best_cost_found = float('inf')
+        num_restarts = self.config.get('sync_restarts', 5)  # Number of random restarts
+        
+        for restart in range(num_restarts):
+            # Create fresh gate structure for each restart (parameter indices are reset)
+            if len(gray_code) == 0:
+                gate_structure_trial = Circuit(self.qbit_num)
+                add_finalizing_layer(gate_structure_trial, self.qbit_num)
+            else:
+                gate_structure_trial = construct_gate_structure_from_gray_code(
+                    gray_code,
+                    self.topology,
+                    self.qbit_num
+                )
+            
+            decomp = N_Qubit_Decomposition_custom(
+                self.Umtx,
+                qbit_num=self.qbit_num,
+                initial_guess="random",
+                config=self.config
+            )
+
+            decomp.set_Gate_Structure(gate_structure_trial)
+
+            # Count layers for adaptive tolerance calculation
+            gates = gate_structure_trial.get_Gates()
+            num_layers = sum(1 for gate in gates if hasattr(gate, 'get_Gates'))
+
+            decomp.set_Verbose(0)
+            decomp.set_Cost_Function_Variant(costfnc=self.cost_function_variant)
+            decomp.set_Optimization_Tolerance(self.calculate_tolerance(num_layers))
+            decomp.set_Optimizer(optimizer=self.optimizer)
+            
+            # Run optimization
+            decomp.Start_Decomposition()
+            
+            # Get results for this trial
+            trial_params = decomp.get_Optimized_Parameters()
+            trial_cost = decomp.Optimization_Problem(trial_params)
+            
+            if trial_cost < best_cost_found:
+                best_cost_found = trial_cost
+                best_decomp = decomp
+                
+                # Early stopping if we reached tolerance
+                if trial_cost < self.calculate_tolerance(num_layers):
+                    break
+        
+        if best_decomp is None:
+            # Fallback - shouldn't happen
+            best_decomp = decomp
+            best_cost_found = trial_cost
+        
+        # Get the final circuit and parameters from best restart
+        final_circuit = best_decomp.get_Circuit()
+        final_params = best_decomp.get_Optimized_Parameters()
+        
+        # Store the results
+        self.best_decomposition = best_decomp
+        self.best_gate_structure = final_circuit
+        self.best_parameters = final_params.copy()
+        self.best_gray_code = gray_code.copy() if gray_code else []
+        self.current_minimum = best_cost_found
+    
+    def _perform_optimization(
+        self,
+        gate_structure
+    ) -> Tuple[float, np.ndarray]:
+        """
+        Perform optimization on a gate structure.
+        
+        Args:
+            gate_structure: Circuit structure to optimize
+        
+        Returns:
+            Tuple of (cost, optimized_parameters)
+        """
+        # Check if using C++ or Python optimizer
+        if self.optimizer in ['BFGS', 'ADAM', 'BFGS2', 'ADAM_BATCHED']:
+            return self._optimize_cpp(gate_structure)
+        else:
+            return self._optimize_python(gate_structure)
+    
+    def _optimize_cpp(self, gate_structure) -> Tuple[float, np.ndarray]:
+        """Optimize using C++ optimizer."""
+        from squander import N_Qubit_Decomposition_custom
+
+        # Create decomposition instance
+        # self.Umtx is already Umtx.conj().T as passed by the user (standard convention)
+        decomp = N_Qubit_Decomposition_custom(
+            self.Umtx,
+            qbit_num=self.qbit_num,
+            initial_guess="random",
+            config=self.config
+        )
+
+        # Set custom gate structure
+        decomp.set_Gate_Structure(gate_structure)
+
+        # Count layers for adaptive tolerance calculation
+        gates = gate_structure.get_Gates()
+        num_layers = sum(1 for gate in gates if hasattr(gate, 'get_Gates'))
+
+        decomp.set_Verbose(self.verbose if self.verbose <= 1 else 1)
+        decomp.set_Cost_Function_Variant(costfnc=self.cost_function_variant)
+        decomp.set_Optimization_Tolerance(self.calculate_tolerance(num_layers))
+        decomp.set_Trace_Offset(trace_offset=self.trace_offset)
+        decomp.set_Optimizer(optimizer=self.optimizer)
+        
+        if self.project_name:
+            decomp.set_Project_Name(self.project_name)
+        
+        # Set optimizer-specific INNER iteration parameters
+        # set_Max_Iterations() sets max_inner_iterations, not max_outer_iterations
+        if self.optimizer in ['ADAM', 'BFGS2']:
+            param_num = gate_structure.get_Parameter_Num()
+            if self.max_inner_iterations is None:
+                max_inner = int(param_num / 852 * 1e7)
+            else:
+                max_inner = self.max_inner_iterations
+            decomp.set_Max_Iterations(max_inner)
+            # Note: set_random_shift_count_max is not exposed in Python wrapper
+        elif self.optimizer == 'ADAM_BATCHED':
+            if self.max_inner_iterations is None:
+                decomp.set_Max_Iterations(2000)
+            else:
+                decomp.set_Max_Iterations(self.max_inner_iterations)
+        elif self.optimizer == 'BFGS':
+            if self.max_inner_iterations is None:
+                decomp.set_Max_Iterations(10000)
+            else:
+                decomp.set_Max_Iterations(self.max_inner_iterations)
+        
+        # Start optimization
+        decomp.Start_Decomposition()
+        
+        final_circuit = decomp.get_Circuit()
+        parameters = decomp.get_Optimized_Parameters()
+        num_iters = decomp.get_Num_of_Iters()
+        
+        # Verify parameter count matches final circuit
+        final_param_num = final_circuit.get_Parameter_Num()
+        original_param_num = gate_structure.get_Parameter_Num()
+        
+        if len(parameters) != final_param_num and len(parameters) == original_param_num:
+            # Parameters match original structure, but final circuit was modified
+            # Calculate cost with original structure and full parameters
+            # This matches what the optimization actually optimized
+            try:
+                temp_decomp = N_Qubit_Decomposition_custom(
+                    self.Umtx,
+                    qbit_num=self.qbit_num,
+                    initial_guess="random",
+                    config=self.config
+                )
+                temp_decomp.set_Gate_Structure(gate_structure)
+                temp_decomp.set_Cost_Function_Variant(costfnc=self.cost_function_variant)
+                # Use full parameters with original structure for cost calculation
+                # This gives us the actual optimized cost
+                cost = temp_decomp.Optimization_Problem(parameters)
+                if not np.isfinite(cost):
+                    # If cost is inf/nan, fall back to using final circuit
+                    if self.verbose >= 2:
+                        print(f"  Warning: Cost with original structure is {cost}, using final circuit")
+                    cost = decomp.Optimization_Problem(parameters[:final_param_num] if len(parameters) > final_param_num else parameters)
+            except Exception as e:
+                if self.verbose >= 2:
+                    print(f"  Warning: Error calculating cost with original structure: {e}")
+                # Fall back to using final circuit
+                cost = decomp.Optimization_Problem(parameters[:final_param_num] if len(parameters) > final_param_num else parameters)
+        else:
+            # Parameters should match final circuit - verify and use
+            if len(parameters) != final_param_num:
+                # Mismatch - adjust parameters to match final circuit
+                if len(parameters) > final_param_num:
+                    parameters = parameters[:final_param_num]
+                elif len(parameters) < final_param_num:
+                    parameters = np.pad(parameters, (0, final_param_num - len(parameters)), 'constant')
+            cost = decomp.Optimization_Problem(parameters)
+
+        self.number_of_iters += num_iters
+
+        # Store this decomposition instance if it's the best so far
+        if cost < self.current_minimum:
+            self.best_decomposition = decomp
+            # Store the final circuit structure (flattened, for Qiskit export via get_Qiskit_Circuit())
+            self.best_final_circuit = final_circuit
+            # Store the FULL parameters (45) matching the original hierarchical structure
+            # These are the parameters that were actually optimized
+            self.best_parameters = parameters.copy()
+            # Store the original hierarchical gate structure for reconstruction/verification
+            self.best_gate_structure = gate_structure
+        
+        # Return the FULL parameters (45) matching the original hierarchical structure
+        return (cost, parameters)
+    
+    def _optimize_python(self, gate_structure) -> Tuple[float, np.ndarray]:
+        """Optimize using Python optimizer (scipy)."""
+        # This will be implemented to support scipy optimizers
+        # For now, fall back to C++ optimizer
+        if self.verbose >= 1:
+            print(f"Warning: Python optimizer '{self.optimizer}' not yet implemented, using BFGS")
+        self.optimizer = 'BFGS'
+        return self._optimize_cpp(gate_structure)
+    
+    def calculate_tolerance(self, level_num) -> float:
+        """
+        Calculate the approximate tolerance based on accumulated layer errors.
+
+        For N layers each with fidelity F, the total error is approximately:
+        error ≈ N * (1 - F) for small (1-F)
+
+        minimal_error acts as a safety margin - we never accept worse than this.
+
+        Returns max(level_num * (1 - layer_fidelity), minimal_error)
+        """
+        return max(level_num,1) * (1 - self.layer_fidelity)*self.minimal_error
