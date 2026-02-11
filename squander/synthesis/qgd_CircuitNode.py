@@ -116,7 +116,9 @@ class qgd_CircuitNode:
             if CNOT_basis:
                 for qbit_subspace in range(2,self.num_qubits):
                     tlb = self.tlb(qbit_subspace)
-                    unique_qbits = frozenset(x for tup in self.gates[-tlb+1:] for x in tup)
+                    if len(self.raw_gates)<tlb:
+                        break
+                    unique_qbits = frozenset(x for tup in self.raw_gates[-tlb+1:] for x in tup)
                     if len(unique_qbits)<= qbit_subspace:
                         qbit_subspaces.append((qbit_subspace,unique_qbits))
 
