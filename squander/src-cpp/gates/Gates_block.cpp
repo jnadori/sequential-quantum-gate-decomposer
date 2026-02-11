@@ -2239,6 +2239,7 @@ Gates_block::create_remapped_circuit( const std::map<int, int>& qbit_map, const 
         case T_OPERATION: case TDG_OPERATION:
         case CZ_NU_OPERATION: case CU_OPERATION:
         case CNZ_OPERATION: case N_QUBIT_PHASE_OPERATION:
+        case CROT_OPERATION:
         {
             Gate* cloned_op = op->clone();
 
@@ -2442,8 +2443,9 @@ void Gates_block::set_qbit_num( int qbit_num_in ) {
         case U3_OPERATION:
         case CP_OPERATION: case SWAP_OPERATION:
         case CSWAP_OPERATION: case CCX_OPERATION:
-        case RY_OPERATION: case CRY_OPERATION: 
+        case RY_OPERATION: case CRY_OPERATION:
         case RX_OPERATION: case CR_OPERATION:
+        case CRX_OPERATION: case CRZ_OPERATION:
         case RZ_OPERATION: case X_OPERATION:
         case Y_OPERATION: case Z_OPERATION:
         case SX_OPERATION: case BLOCK_OPERATION:
@@ -2458,7 +2460,7 @@ void Gates_block::set_qbit_num( int qbit_num_in ) {
             op->set_qbit_num( qbit_num_in );
             break;
         default:
-            std::string err("Gates_block::set_qbit_num: unimplemented gate"); 
+            std::string err("Gates_block::set_qbit_num: unimplemented gate");
             throw err;
         }
     }

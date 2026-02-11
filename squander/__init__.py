@@ -20,6 +20,7 @@ from squander.VQA.qgd_Variational_Quantum_Eigensolver_Base import qgd_Variationa
 from squander.VQA.qgd_Generative_Quantum_Machine_Learning_Base import qgd_Generative_Quantum_Machine_Learning_Base as Generative_Quantum_Machine_Learning
 
 from squander.synthesis.qgd_GraphSearch import qgd_TreeSearch as TreeSearch
+from squander.synthesis.qgd_GraphSearch import qgd_ApproximateSearch as ApproximateSearch
 #gates
 from squander.gates.gates_Wrapper import (
     Gate,

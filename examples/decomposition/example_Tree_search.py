@@ -7,7 +7,7 @@ it to exhaustive search.
 """
 
 import numpy as np
-from squander import TreeSearch, Circuit
+from squander import TreeSearch, ApproximateSearch, Circuit
 
 
 def generate_random_circuit(N: int, d: int, seed: int = None) -> Circuit:
@@ -93,11 +93,10 @@ def example_basic():
 
     # A* configuration
     config = {
-        'tree_level_max': 8,
+        'tree_level_max': 4,
         'optimization_tolerance': 1e-6,
-        'max_outer_iterations': 1,
-        'max_inner_iterations' : 500,
         'optimizer': 'BFGS',
+        'parallel_search':6
     }
 
     # Run decomposition with A* search
@@ -130,9 +129,74 @@ def example_basic():
     else:
         print("  FAILURE: Decomposition does NOT match target unitary!")
 
+def example_approximate():
+    """Approximate search example with adaptive tolerance."""
+    print("="*70)
+    print("Example 2: Approximate Search")
+    print("="*70)
+
+    # Generate a random circuit and get its unitary
+    N = 3
+    d = 4  # Number of 2-qubit blocks
+
+    random_circuit = generate_random_circuit(N, d, seed=42)
+    random_params = np.random.rand(random_circuit.get_Parameter_Num()) * 2 * np.pi
+    Umtx = random_circuit.get_Matrix(random_params)
+
+    print(f"Generated random circuit with {N} qubits and {d} 2-qubit blocks")
+    print(f"Circuit has {random_circuit.get_Parameter_Num()} parameters")
+
+    config = {
+        'tree_level_max': 4,
+        'optimizer': 'BFGS2',
+        'parallel_search': 6
+    }
+
+    # Run decomposition with approximate search
+    # layer_fidelity: expected fidelity per CNOT layer (e.g. 0.995 for noisy hardware)
+    # minimal_error: scaling factor for the adaptive tolerance
+    decomposer = ApproximateSearch(
+        Umtx.conj().T,
+        topology=None,
+        config=config,
+        layer_fidelity=0.995,
+        minimal_error=1e-1
+    )
+
+    best_circuit, best_parameters, best_score = decomposer.start_decomposition()
+
+    # Print results
+    print(f"\nResult:")
+    print(f"  Reported score: {best_score}")
+    print(f"  Gate counts: {best_circuit.get_Gate_Nums()}")
+
+    # Verify the decomposition by computing the actual error
+    decomposed_Umtx = best_circuit.get_Matrix(best_parameters)
+
+    # Compute trace fidelity: |Tr(U† V)|² / d²
+    d_dim = Umtx.shape[0]
+    trace_fidelity = np.abs(np.trace(Umtx.conj().T @ decomposed_Umtx))**2 / d_dim**2
+    hilbert_schmidt_cost = 1 - trace_fidelity
+
+    print(f"\nVerification (independent calculation):")
+    print(f"  Hilbert-Schmidt cost: {hilbert_schmidt_cost:.6f}")
+    print(f"  Trace fidelity: {trace_fidelity:.6f}")
+
+    # For approximate search, the tolerance is adaptive:
+    # at the level found, tolerance = max(level, 1) * (1 - 0.995) * 0.1
+    best_level = len(best_circuit.get_Gate_Nums()) if best_circuit else 0
+    print(f"\n  Adaptive tolerance at acceptance: {decomposer.calculate_tolerance(best_level):.6e}")
+
+    if hilbert_schmidt_cost < 1e-2:
+        print("  SUCCESS: Approximate decomposition is within acceptable error!")
+    else:
+        print("  NOTE: Decomposition has larger error (expected for approximate search)")
+
+
 def main():
     """Run all examples."""
     example_basic()
+    example_approximate()
 
     print("="*70)
     print("All examples completed!")

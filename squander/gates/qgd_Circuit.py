@@ -83,8 +83,6 @@ class qgd_Circuit(qgd_Circuit_Wrapper):
         """
 
     def __setstate__(self, state):
-
-        print( state )
         super().__setstate__( state )
     
 
