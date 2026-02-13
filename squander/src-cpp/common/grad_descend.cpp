@@ -45,7 +45,7 @@ Grad_Descend::Grad_Descend(void (* f_pointer) (Matrix_real, void *, double *, Ma
     // number of function calls during the optimization process
     function_call_count = 0;
 
-    eta = 0.5;
+    eta = 0.9;
 
 }
 
@@ -73,7 +73,7 @@ Grad_Descend::Grad_Descend(void (* f_pointer) (Matrix_real, void *, double *, Ma
     // number of function calls during the optimization process
     function_call_count = 0;
 
-    eta = 0.5;
+    eta = 0.9;
 
 
 }
