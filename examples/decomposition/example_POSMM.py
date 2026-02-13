@@ -22,6 +22,6 @@ Circ, Umtx = construct_unitary(N,d)
 config = {'parallel':0,'optimization_loops':100,'tolerance':1e-7,'worker_num':8}
 NVDecompose = POSMM_Decomposition(Umtx.conj().T,Circ, 0.5, config = config)
 start = time.time()
-params,score, optim_time = NVDecompose.Start_decomposition()
+params,score = NVDecompose.Start_decomposition()
 compilation_time = time.time()-start
 print(score,compilation_time)
