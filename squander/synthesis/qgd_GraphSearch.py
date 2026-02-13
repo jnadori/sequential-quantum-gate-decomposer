@@ -329,7 +329,6 @@ class qgd_ApproximateSearch(qgd_TreeSearch):
                         best_circuit = result[1]
                         best_parameters = result[2]
                 if best_score < adaptive_tolerance:
-                    print("success")
                     break
                 new_level_nodes = []
                 for node in level_nodes:
