@@ -222,7 +222,6 @@ class qgd_TreeSearch:
                         best_circuit=result[1]
                         best_parameters=result[2]
                 if best_score < self.config['tolerance']:
-                    print("success")
                     break
                 new_level_nodes = []
                 for node in level_nodes:
