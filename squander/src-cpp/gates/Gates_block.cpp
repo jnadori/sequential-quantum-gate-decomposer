@@ -2649,7 +2649,6 @@ int Gates_block::extract_gates( Gates_block* op_block ) {
         case SWAP_OPERATION: case RXX_OPERATION:
         case RYY_OPERATION: case RZZ_OPERATION:
         case CNZ_OPERATION: case N_QUBIT_PHASE_OPERATION:
-        case SWAP_OPERATION:
         case CSWAP_OPERATION: case CCX_OPERATION:
 
         {

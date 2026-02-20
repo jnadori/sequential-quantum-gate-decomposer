@@ -76,13 +76,12 @@ typedef enum gate_type {GENERAL_OPERATION=1,
                         CSWAP_OPERATION=43,
                         RXX_OPERATION=44,
                         RYY_OPERATION=45,
-                        RZZ_OPERATION=46} gate_type;
-                        CSWAP_OPERATION=43,
-                        N_QUBIT_PHASE_OPERATION=44,
-                        CNZ_OPERATION=45,
-                        CNZ_NU_OPERATION=46,
-			            N_QUBIT_PERMUTATION_OPERATION=47,
-                        N_QUBIT_PERMUTATION_NU_OPERATION=48} gate_type;
+                        RZZ_OPERATION=46,
+                        N_QUBIT_PHASE_OPERATION=47,
+                        CNZ_OPERATION=48,
+                        CNZ_NU_OPERATION=49,
+			            N_QUBIT_PERMUTATION_OPERATION=50,
+                        N_QUBIT_PERMUTATION_NU_OPERATION=51} gate_type;
 
 	
 

@@ -61,7 +61,7 @@ from squander.gates.gates_Wrapper import (
     CCX,
     RXX,
     RYY,
-    RZZ )
+    RZZ,
     CCX,
     CNZ)
 
