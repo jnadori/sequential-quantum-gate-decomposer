@@ -447,6 +447,12 @@ class qgd_POSMMSearch(qgd_TreeSearch):
         )
         self.config.setdefault('optimization_loops', 100)
         self.config.setdefault('worker_num', 1)
+        self.config.setdefault('screen_iterations', 100)
+        self.config.setdefault('refine_count', max(1, self.config['worker_num'] // 4))
+        self.config.setdefault('max_stagnation', 5)
+        self.config.setdefault('perturbation_scale', 0.5)
+        self.config.setdefault('refinement_attempts', 20)
+        self.config.setdefault('refinement_scales', [0.1, 0.3, 1.0])
         self.rconstant = rconstant
 
     def decompose_single_node(self, node):
