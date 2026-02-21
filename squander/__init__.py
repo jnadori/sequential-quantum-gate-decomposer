@@ -64,6 +64,7 @@ from squander.gates.qgd_Circuit import qgd_Circuit as Circuit
 #SABRE
 from squander.synthesis.qgd_SABRE import qgd_SABRE as SABRE
 from squander.synthesis.qgd_POSMM import qgd_POSMM_Decomposition as POSMM_Decomposition
+from squander.synthesis.qgd_GraphSearch import qgd_POSMMSearch as POSMMSearch
 
 # Qiskit IO
 from squander.IO_interfaces import Qiskit_IO
