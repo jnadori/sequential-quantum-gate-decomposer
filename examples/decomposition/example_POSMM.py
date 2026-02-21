@@ -19,16 +19,7 @@ def construct_unitary(N,depth):
 N = 3
 d = 7
 Circ, Umtx = construct_unitary(N,d)
-config = {
-    'parallel': 0,
-    'optimization_loops': 100,
-    'tolerance': 1e-7,
-    'worker_num': 8,
-    'screen_iterations': 100,   # BFGS iterations for quick screening phase
-    'refine_count': 2,          # number of top candidates to fully optimize
-    'max_stagnation': 5,        # rounds without improvement before stopping
-    'perturbation_scale': 0.5,  # Gaussian noise scale for perturbation restarts
-}
+config = {'parallel':0,'optimization_loops':100,'tolerance':1e-7,'worker_num':8}
 NVDecompose = POSMM_Decomposition(Umtx.conj().T,Circ, 0.5, config = config)
 start = time.time()
 params,score = NVDecompose.Start_decomposition()
