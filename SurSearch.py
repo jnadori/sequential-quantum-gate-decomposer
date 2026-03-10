@@ -1,10 +1,10 @@
-# gp_custom.py
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Optional, Sequence, Tuple
 
 import numpy as np
+from scipy.optimize import minimize
 from squander import N_Qubit_Decomposition_custom, Circuit
 
 Array = np.ndarray
@@ -18,7 +18,9 @@ def create_circuit_from_edges(x,N):
         circ.add_U3(edge[0])
         circ.add_U3(edge[1])
         circ.add_CNOT(edge[0],edge[1])
-
+    for qbit_idx in range(N):
+        circ.add_U3(qbit_idx)
+    return circ
 
 def pairwise_kernel_matrix(
     X1: Sequence[Any],
@@ -120,6 +122,44 @@ class GPRegressor:
         quad = float(y.T @ alpha)
         return -0.5 * quad - 0.5 * log_det - 0.5 * n * np.log(2.0 * np.pi)
 
+    def optimize_hyperparameters(self, n_restarts: int = 3) -> "GPRegressor":
+        """
+        Optimize kernel_params and noise by maximizing log marginal likelihood.
+        Uses Nelder-Mead with random restarts to avoid local optima.
+        """
+        if self.X_train is None or self.y_train is None:
+            raise RuntimeError("Call fit() before optimize_hyperparameters().")
+
+        n_kernel = len(self.kernel_params)
+
+        def objective(theta):
+            self.kernel_params = theta[:n_kernel]
+            self.noise = float(np.exp(theta[n_kernel]))  # log-space for positivity
+            try:
+                self.fit(self.X_train, self.y_train)
+                return -self.log_marginal_likelihood()
+            except np.linalg.LinAlgError:
+                return 1e10
+
+        # Initial point: current params + log(noise)
+        theta0 = np.concatenate([self.kernel_params, [np.log(self.noise)]])
+        best_theta = theta0.copy()
+        best_obj = objective(theta0)
+
+        for _ in range(n_restarts):
+            theta_init = theta0 + 0.5 * np.random.randn(len(theta0))
+            res = minimize(objective, theta_init, method="Nelder-Mead",
+                           options={"maxiter": 200, "xatol": 1e-4, "fatol": 1e-4})
+            if res.fun < best_obj:
+                best_obj = res.fun
+                best_theta = res.x.copy()
+
+        # Apply best parameters and refit
+        self.kernel_params = best_theta[:n_kernel]
+        self.noise = float(np.exp(best_theta[n_kernel]))
+        self.fit(self.X_train, self.y_train)
+        return self
+
     @staticmethod
     def _add_diagonal_noise(K: Array, noise: float, jitter: float) -> Array:
         if noise < 0:
@@ -136,37 +176,94 @@ class GPRegressor:
         return np.linalg.solve(L.T, tmp)
 
 
-# --------------------------
-# Example usage (replace kernel)
-# --------------------------
+def _sigmoid(x: float) -> float:
+    return 1.0 / (1.0 + np.exp(-x))
 
-def kernel_placeholder(x1: Any, x2: Any, params: Array) -> float:
-    """
-    Replace this with your Hamming-based kernel (or any kernel).
+def _edge_match(e1: Tuple, e2: Tuple) -> int:
+    """Count shared qubit indices between two edges (0, 1, or 2)."""
+    return (e1[0] == e2[0]) + (e1[1] == e2[1]) + (e1[0] == e2[1]) + (e1[1] == e2[0])
 
-    params is a 1D array you can interpret however you like.
+def _lcs_length(x1: Sequence[Tuple], x2: Sequence[Tuple]) -> int:
+    """Longest common subsequence length using exact edge equality."""
+    n, m = len(x1), len(x2)
+    dp = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            if x1[i-1] == x2[j-1]:
+                dp[i][j] = dp[i-1][j-1] + 1
+            else:
+                dp[i][j] = max(dp[i-1][j], dp[i][j-1])
+    return dp[n][m]
+
+def _raw_kernel(x1: Any, x2: Any, params: Array) -> float:
+    """Unnormalized blended kernel for circuit edge sequences."""
+    order_weight = _sigmoid(float(params[1]))
+
+    # Set similarity: all-pairs, permutation invariant
+    set_score = 0.0
+    for e1 in x1:
+        for e2 in x2:
+            set_score += _edge_match(e1, e2)
+    set_score /= (2.0 * len(x1) * len(x2))
+
+    # Order similarity: longest common subsequence ratio
+    lcs = _lcs_length(x1, x2)
+    order_score = lcs / max(len(x1), len(x2))
+
+    return (1.0 - order_weight) * set_score + order_weight * order_score
+
+def kernel(x1: Any, x2: Any, params: Array) -> float:
     """
-    # Example: linear kernel on numeric vectors (just a placeholder)
-    
-    a = np.asarray(x1, dtype=float).reshape(-1)
-    b = np.asarray(x2, dtype=float).reshape(-1)
-    scale = float(np.exp(params[0]))  # keep positive via exp
-    return scale * float(a @ b)
+    Cosine-normalized blended kernel for circuit edge sequences.
+
+    params[0]: log output scale
+    params[1]: order_weight (pre-sigmoid) — controls how much canonical
+               ordering matters vs set membership
+    """
+    scale = float(np.exp(params[0]))
+    k12 = _raw_kernel(x1, x2, params)
+    k11 = _raw_kernel(x1, x1, params)
+    k22 = _raw_kernel(x2, x2, params)
+    return scale * k12 / np.sqrt(k11 * k22)
+
+def decompose(Umtx, x):
+    config = {'use_basin_hopping': 1, 'bh_T': 1.1375279022671254, 'bh_stepsize': 0.9200273804590016, 'bh_interval': 94, 'bh_target_accept_rate': 0.5661497388955112, 'bh_stepwise_factor': 0.5557762288919466}
+    N = int(np.log2(Umtx.shape[0]))
+    ansatz = create_circuit_from_edges(x,N)
+    cDecomp = N_Qubit_Decomposition_custom(Umtx.conj().T,config=config)
+    cDecomp.set_Verbose(0)
+    cDecomp.set_Cost_Function_Variant(3)
+    cDecomp.set_Gate_Structure(ansatz)
+    cDecomp.set_Optimized_Parameters(np.random.rand(ansatz.get_Parameter_Num())*2*np.pi)
+    cDecomp.set_Optimizer("BFGS2")
+    cDecomp.Start_Decomposition()
+    params = cDecomp.get_Optimized_Parameters()
+    print(cDecomp.Optimization_Problem(params))
+    return cDecomp.Optimization_Problem(params)
+
+def generate_goal_unitary(N, edges):
+    goal = create_circuit_from_edges(edges,N)
+    return goal.get_Matrix(np.random.rand(goal.get_Parameter_Num())*2*np.pi)
 
 
 if __name__ == "__main__":
-    # X can be strings if your kernel supports it.
-    X = [np.array([0, 1, 0]), np.array([1, 1, 0]), np.array([1, 0, 0])]
-    y = np.array([0.2, 0.9, 0.4])
+    N=3
+    goal_edges = [(0,1),(1,2),(0,1)]
+    Umtx = generate_goal_unitary(N, edges=goal_edges)
+    X = [[(2,1),(0,2),(2,1)],[(0,2),(1,2),(1,2)],[(0,1),(0,1),(1,2)],[(0,1),(0,1),(0,1)],[(1,2),(1,2),(1,2)]]
+    y = np.array([decompose(Umtx, x) for x in X])
 
     gp = GPRegressor(
-        kernel_fn=kernel_placeholder,
-        kernel_params=np.array([0.0]),  # log-scale in this placeholder
+        kernel_fn=kernel,
+        kernel_params=np.array([0.0, 1.0]),  # [log-scale, order_weight (pre-sigmoid)]
         noise=1e-2,
     ).fit(X, y)
 
-    X_star = [np.array([0, 1, 1]), np.array([1, 0, 1])]
+    print(f"Before optimization: log_scale={gp.kernel_params[0]:.4f}, order_weight={_sigmoid(gp.kernel_params[1]):.4f}, noise={gp.noise:.6f}")
+    gp.optimize_hyperparameters(n_restarts=5)
+    print(f"After optimization:  log_scale={gp.kernel_params[0]:.4f}, order_weight={_sigmoid(gp.kernel_params[1]):.4f}, noise={gp.noise:.6f}")
+
+    X_star = [[(0,1),(1,2),(0,1)],[(0,2),(1,2),(1,2)]]
     mu, std = gp.predict(X_star, return_std=True, include_noise=False)
     print("mu:", mu)
     print("std:", std)
-    print("lml:", gp.log_marginal_likelihood())
