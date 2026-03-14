@@ -5,7 +5,9 @@ from typing import Any, Optional, Sequence, Tuple
 
 import numpy as np
 from scipy.optimize import minimize
+from multiprocessing import Pool
 from squander import N_Qubit_Decomposition_custom, Circuit
+from squander.synthesis.qgd_POSMM import qgd_POSMM_Decomposition
 
 from math import ceil
 import heapq
@@ -392,7 +394,7 @@ class qgd_SurSearch:
                     topology.append((idx,jdx))
         self.topology = topology
 
-    def search_over_D(self, log_file="sursearch_diagnostics.txt"):
+    def search_over_D(self, log_file="sursearch_diagnostics.txt", pool=None):
         from scipy.spatial.distance import pdist
 
         circuits = unique_k_sequences(self.topology, self.D)
@@ -409,7 +411,7 @@ class qgd_SurSearch:
         np.random.shuffle(circuits)
         X = circuits[:self.config.get("X0_size", 20)]
         remaining_circs = circuits[self.config.get("X0_size", 20):]
-        y = np.array([self.decompose(x) for x in X])
+        y = np.array([self.decompose(x, pool=pool) for x in X])
         max_iters = self.config.get('max_sur_iters', 1000)
         best_circ = X[np.argmin(y)]
         if np.min(y) < self.config.get('tolerance', 1e-8):
@@ -460,7 +462,7 @@ class qgd_SurSearch:
 
             log_lcb_vals = self.lcb(log_mu, log_std)
             lcb_idx = np.argmin(log_lcb_vals)
-            lcb_score = self.decompose(remaining_circs[lcb_idx])
+            lcb_score = self.decompose(remaining_circs[lcb_idx], pool=pool)
 
             pred_score = 10 ** log_mu[lcb_idx]
 
@@ -500,11 +502,21 @@ class qgd_SurSearch:
         return best_circ
 
 
-    def decompose(self, x):
+    def decompose(self, x, pool=None):
+        ansatz = create_circuit_from_edges(x, self.N)
+        if self.config.get('optimizer') == 'POSMM':
+            posmm = qgd_POSMM_Decomposition(
+                self.Umtx.conj().T,
+                ansatz,
+                self.config.get('rconstant', 0.5),
+                self.config,
+                pool=pool,
+            )
+            _, score = posmm.Start_decomposition()
+            return score
         n_restarts = self.config.get('decompose_restarts', 3)
         best = float('inf')
         for _ in range(n_restarts):
-            ansatz = create_circuit_from_edges(x, self.N)
             cDecomp = N_Qubit_Decomposition_custom(self.Umtx.conj().T, config=self.config)
             cDecomp.set_Verbose(0)
             cDecomp.set_Cost_Function_Variant(3)
@@ -516,7 +528,7 @@ class qgd_SurSearch:
             score = cDecomp.Optimization_Problem(params)
             best = min(best, score)
         return best
-    
+
     def lcb(self,mu,std):
         return mu - self.kappa*std
 
@@ -525,7 +537,7 @@ if __name__ == "__main__":
     N=3
     goal_edges = [(0,1),(1,2),(0,1),(0,2),(0,2),(1,2),(0,1)]
     Umtx = generate_goal_unitary(N, edges=goal_edges)
-    config = {'use_basin_hopping': 1, 'bh_T': 1.1375279022671254, 'bh_stepsize': 0.9200273804590016, 'bh_interval': 94, 'bh_target_accept_rate': 0.5661497388955112, 
+    config = {'use_basin_hopping': 1, 'bh_T': 1.1375279022671254, 'bh_stepsize': 0.9200273804590016, 'bh_interval': 94, 'bh_target_accept_rate': 0.5661497388955112,
               'bh_stepwise_factor': 0.5557762288919466,'optimizer':'BFGS2','parallel':2,'X0_size':50,'max_sur_iters':500, 'kappa':0.5}
     sursearch = qgd_SurSearch(Umtx,config,len(goal_edges))
     sursearch.search_over_D()
