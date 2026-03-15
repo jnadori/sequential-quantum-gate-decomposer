@@ -1091,6 +1091,9 @@ qgd_N_Qubit_Decomposition_Wrapper_set_Optimizer(qgd_N_Qubit_Decomposition_Wrappe
     else if (strcmp("bayes_opt", optimizer_C) == 0 || strcmp("BAYES_OPT", optimizer_C) == 0) {
         qgd_optimizer = BAYES_OPT;
     }
+    else if (strcmp("posmm", optimizer_C) == 0 || strcmp("POSMM", optimizer_C) == 0) {
+        qgd_optimizer = POSMM;
+    }
     else {
         std::cout << "Wrong optimizer: " << optimizer_C << ". Using default: BFGS" << std::endl;
         qgd_optimizer = BFGS;

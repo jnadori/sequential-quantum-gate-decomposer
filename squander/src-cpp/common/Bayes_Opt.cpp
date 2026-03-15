@@ -100,7 +100,15 @@ void HS_partial_optimization_problem_cos_combined( Matrix_real parameters, void*
 
 }
 
-
+double calculate_distance(const Matrix_real x1, const Matrix_real x2){
+    double distance = 0; 
+    for (int idx=0; idx<x1.size(); idx++){
+        double deltax = std::fabs(x1[idx]-x2[idx]);
+        deltax = std::min(2.*M_PI - deltax,deltax);
+        distance = distance + deltax*deltax;
+    }
+    return std::sqrt(distance);
+}
 
 /**
 @brief Constructor of the class.

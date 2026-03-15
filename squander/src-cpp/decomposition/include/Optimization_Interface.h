@@ -45,7 +45,7 @@ typedef enum cost_function_type {FROBENIUS_NORM, FROBENIUS_NORM_CORRECTION1, FRO
 
 
 /// implemented optimization strategies
-enum optimization_aglorithms{ ADAM, BFGS, BFGS2, ADAM_BATCHED, AGENTS, COSINE, AGENTS_COMBINED, GRAD_DESCEND, BAYES_OPT, BAYES_AGENTS, GRAD_DESCEND_PARAMETER_SHIFT_RULE};
+enum optimization_aglorithms{ ADAM, BFGS, BFGS2, ADAM_BATCHED, AGENTS, COSINE, AGENTS_COMBINED, GRAD_DESCEND, BAYES_OPT, BAYES_AGENTS, GRAD_DESCEND_PARAMETER_SHIFT_RULE, POSMM};
 
 
 
@@ -265,6 +265,12 @@ void solve_layer_optimization_problem_BAYES_OPT( int num_of_parameters, Matrix_r
 */
 void solve_layer_optimization_problem_BAYES_AGENTS( int num_of_parameters, Matrix_real& solution_guess);
 
+/**
+@brief Call to solve layer by layer the optimization problem via Bayes & Agents algorithm. The optimalized parameters are stored in attribute optimized_parameters.
+@param num_of_parameters Number of parameters to be optimized
+@param solution_guess A matrix containing the solution guess.
+*/
+void solve_layer_optimization_problem_POSMM( int num_of_parameters, Matrix_real& solution_guess);
 
 
 /**

@@ -72,6 +72,7 @@ void HS_partial_optimization_problem_combined( Matrix_real parameters, void* voi
 */
 void HS_partial_optimization_problem_cos_combined( Matrix_real parameters, void* void_params, double* f0, Matrix_real& grad);
 
+double calculate_distance(const Matrix_real x1, const Matrix_real x2);
 
 /**
  * @brief A class implementing the BayesOpt algorithm as seen in: https://browse.arxiv.org/pdf/1807.02811.pdf
