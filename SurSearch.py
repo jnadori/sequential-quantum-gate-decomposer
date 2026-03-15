@@ -263,7 +263,8 @@ class GPRegressor:
         return -0.5 * quad - 0.5 * log_det - 0.5 * n * np.log(2.0 * np.pi)
 
     def optimize_hyperparameters(self, n_restarts: int = 3,
-                                  kernel_bounds: Optional[list] = None) -> "GPRegressor":
+                                  kernel_bounds: Optional[list] = None,
+                                  noise_bounds: Tuple[float, float] = (-8.0, 2.0)) -> "GPRegressor":
         if self.F_train is None or self.y_train is None:
             raise RuntimeError("Call fit() before optimize_hyperparameters().")
 
@@ -285,9 +286,9 @@ class GPRegressor:
 
         # Bounds: use caller-provided kernel bounds or default [-3,3] per kernel param
         if kernel_bounds is not None:
-            bounds = list(kernel_bounds) + [(-8.0, 2.0)]
+            bounds = list(kernel_bounds) + [noise_bounds]
         else:
-            bounds = [(-3.0, 3.0)] * n_kernel + [(-8.0, 2.0)]
+            bounds = [(-3.0, 3.0)] * n_kernel + [noise_bounds]
 
         for _ in range(n_restarts):
             theta_init = theta0 + 0.5 * np.random.randn(len(theta0))
@@ -399,86 +400,123 @@ class qgd_SurSearch:
 
         circuits = unique_k_sequences(self.topology, self.D)
         edges = sorted(set(tuple(e) for e in self.topology))
-
-        # Hand-crafted features only (no WL) + z-score standardization
-        raw = {tuple(c): circuit_features(c, edges, self.N) for c in circuits}
-        all_feats = np.array(list(raw.values()))
-        feat_mean = all_feats.mean(axis=0)
-        feat_std = all_feats.std(axis=0)
-        feat_std[feat_std < 1e-12] = 1.0
-        feature_cache = {k: (v - feat_mean) / feat_std for k, v in raw.items()}
-
-        np.random.shuffle(circuits)
-        X = circuits[:self.config.get("X0_size", 20)]
-        remaining_circs = circuits[self.config.get("X0_size", 20):]
-        y = np.array([self.decompose(x, pool=pool) for x in X])
+        acquisition = self.config.get('acquisition', 'EI')
+        tolerance = self.config.get('tolerance', 1e-8)
         max_iters = self.config.get('max_sur_iters', 1000)
-        best_circ = X[np.argmin(y)]
-        if np.min(y) < self.config.get('tolerance', 1e-8):
-            print(f"Success at random selection")
+        X0_size = self.config.get('X0_size', 5)
 
-        # Data-driven lengthscale initialization
-        all_standardized = np.array(list(feature_cache.values()))
-        median_dist = float(np.median(pdist(all_standardized, 'euclidean')))
-        log_median = np.log(max(median_dist, 1e-6))
+        # Compute features for EI/LCB only
+        feature_cache = None
+        gp_kernel_params = None
+        gp_noise = None
+        gp_bounds = None
+        feat_dim = None
 
-        feat_dim = all_feats.shape[1]
+        if acquisition in ('EI', 'LCB'):
+            raw = {tuple(c): circuit_features(c, edges, self.N) for c in circuits}
+            all_feats = np.array(list(raw.values()))
+            feat_mean = all_feats.mean(axis=0)
+            feat_std = all_feats.std(axis=0)
+            feat_std[feat_std < 1e-12] = 1.0
+            feature_cache = {k: (v - feat_mean) / feat_std for k, v in raw.items()}
+            all_standardized = np.array(list(feature_cache.values()))
+            median_dist = float(np.median(pdist(all_standardized, 'euclidean')))
+            log_median = np.log(max(median_dist, 1e-6))
+            feat_dim = all_feats.shape[1]
+            gp_kernel_params = np.array([0.0, log_median])
+            gp_noise = 1e-2
+            gp_bounds = [(-3.0, 3.0), (log_median - 3.0, log_median + 3.0)]
+
+            def _feature_matrix(circs):
+                return np.array([feature_cache[tuple(c)] for c in circs])
+
+        # Initial random sample
+        np.random.shuffle(circuits)
+        X = list(circuits[:X0_size])
+        remaining_circs = list(circuits[X0_size:])
+        y = np.array([self.decompose(x, pool=pool) for x in X])
+        best_score = float(np.min(y))
+        best_circ = X[int(np.argmin(y))]
+
         with open(log_file, 'w') as f:
             f.write(f"SurSearch diagnostics: N={self.N}, D={self.D}, "
-                    f"kappa={self.kappa}, topology={self.topology}\n")
-            f.write(f"Total circuits: {len(circuits)}, "
-                    f"initial sample: {len(X)}, "
-                    f"feature dim: {feat_dim} (hand-crafted)\n")
+                    f"acquisition={acquisition}, kappa={self.kappa}, topology={self.topology}\n")
+            feat_info = f"feature dim: {feat_dim}" if feat_dim is not None else "no surrogate"
+            f.write(f"Total circuits: {len(circuits)}, initial sample: {X0_size}, {feat_info}\n")
             f.write(f"Initial y stats: min={np.min(y):.6f}, "
                     f"mean={np.mean(y):.4f}, std={np.std(y):.4f}\n")
-            f.write(f"Median pairwise distance: {median_dist:.4f}, "
-                    f"log_median: {log_median:.4f}\n")
             f.write("-" * 70 + "\n")
 
-        best_score = np.min(y)
-        _LOG_FLOOR = 1e-12
-        # [log_scale, log_lengthscale] — RBF kernel, lengthscale from data
-        gp_kernel_params = np.array([0.0, log_median])
-        gp_noise = 1e-2
-        # Adaptive bounds: lengthscale upper = log_median + 3
-        gp_bounds = [(-3.0, 3.0), (log_median - 3.0, log_median + 3.0)]
-
-        def _feature_matrix(circs):
-            return np.array([feature_cache[tuple(c)] for c in circs])
+        if best_score < tolerance:
+            print("Success at random selection")
+            with open(log_file, 'a') as f:
+                f.write("Success at random selection\n")
+            return best_circ
 
         for itr in range(max_iters):
-            F_train = _feature_matrix(X)
-            F_remaining = _feature_matrix(remaining_circs)
+            if not remaining_circs:
+                break
 
-            log_y = np.log10(np.maximum(y, _LOG_FLOOR))
-            gp = GPRegressor(
-                kernel_params=gp_kernel_params.copy(),
-                noise=gp_noise,
-            ).fit(F_train, log_y)
-            gp.optimize_hyperparameters(n_restarts=2, kernel_bounds=gp_bounds)
-            gp_kernel_params = gp.kernel_params.copy()
-            gp_noise = gp.noise
-            log_mu, log_std = gp.predict(F_remaining, return_std=True, include_noise=False)
+            if acquisition == 'random':
+                selected_idx = int(np.random.randint(len(remaining_circs)))
+                acq_disp = float('nan')
+                gp_scale_disp = gp_ls_disp = gp_noise_disp = float('nan')
+            else:
+                F_train = _feature_matrix(X)
+                F_remaining = _feature_matrix(remaining_circs)
 
-            log_lcb_vals = self.lcb(log_mu, log_std)
-            lcb_idx = np.argmin(log_lcb_vals)
-            lcb_score = self.decompose(remaining_circs[lcb_idx], pool=pool)
+                # Dynamic floor: clamp successes to avoid -inf in log10
+                nonzero_y = y[y > 0]
+                dynamic_floor = float(nonzero_y.min()) * 0.01 if len(nonzero_y) > 0 else tolerance * 0.01
+                y_clamped = np.maximum(y, dynamic_floor)
+                log_y = np.log10(y_clamped)
+                lmu = float(log_y.mean())
+                lsig = float(max(log_y.std(), 1e-6))
+                log_y_norm = (log_y - lmu) / lsig
 
-            pred_score = 10 ** log_mu[lcb_idx]
+                gp = GPRegressor(
+                    kernel_params=gp_kernel_params.copy(),
+                    noise=gp_noise,
+                ).fit(F_train, log_y_norm)
+                try:
+                    gp.optimize_hyperparameters(n_restarts=2, kernel_bounds=gp_bounds,
+                                                noise_bounds=(-8.0, 0.0))
+                except Exception:
+                    pass
+                gp_kernel_params = gp.kernel_params.copy()
+                gp_noise = gp.noise
+                gp_scale_disp = float(np.exp(gp_kernel_params[0]))
+                gp_ls_disp = float(np.exp(gp_kernel_params[1]))
+                gp_noise_disp = gp_noise
 
-            if lcb_score < best_score:
-                best_score = lcb_score
-                best_circ = remaining_circs[lcb_idx]
+                log_mu_norm, log_std_norm = gp.predict(F_remaining, return_std=True,
+                                                       include_noise=False)
 
-            # --- Diagnostics ---
+                if acquisition == 'EI':
+                    best_score_pos = max(best_score, dynamic_floor)
+                    log_y_best_norm = (np.log10(best_score_pos) - lmu) / lsig
+                    acq_vals = self.ei(log_mu_norm, log_std_norm, log_y_best_norm)
+                else:  # LCB
+                    acq_vals = self.lcb(log_mu_norm, log_std_norm)
+
+                selected_idx = int(np.argmin(acq_vals))
+                acq_disp = float(acq_vals[selected_idx])
+
+            new_score = self.decompose(remaining_circs[selected_idx], pool=pool)
+
+            if new_score < best_score:
+                best_score = new_score
+                best_circ = remaining_circs[selected_idx]
+
             lines = [
                 f"Iteration {itr}:",
-                f"  GP hyperparams: scale={np.exp(gp.kernel_params[0]):.4f}, "
-                f"lengthscale={np.exp(gp.kernel_params[1]):.4f}, noise={gp.noise:.6f}",
-                f"  Log10-space: mu={log_mu[lcb_idx]:.4f}, std={log_std[lcb_idx]:.4f}, "
-                f"LCB={log_lcb_vals[lcb_idx]:.4f}",
-                f"  Predicted score: {pred_score:.6f}, actual score: {lcb_score:.6f}, "
-                f"ratio: {pred_score / max(lcb_score, _LOG_FLOOR):.2f}x",
+                f"  acquisition={acquisition}, acq_val={acq_disp:.6f}",
+            ]
+            if acquisition in ('EI', 'LCB'):
+                lines.append(f"  GP: scale={gp_scale_disp:.4f}, "
+                             f"ls={gp_ls_disp:.4f}, noise={gp_noise_disp:.6f}")
+            lines += [
+                f"  Actual score: {new_score:.6f}",
                 f"  Best score so far: {best_score:.6f} "
                 f"({len(X)+1} evaluated, {len(remaining_circs)-1} remaining)",
                 f"  y stats: min={np.min(y):.4f}, mean={np.mean(y):.4f}, "
@@ -488,16 +526,16 @@ class qgd_SurSearch:
                 print(line)
             with open(log_file, 'a') as f:
                 f.write("\n".join(lines) + "\n")
-            # -------------------
 
-            if lcb_score < self.config.get('tolerance', 1e-8):
-                print(f"Success at iteration: {itr}")
+            if new_score < tolerance:
+                msg = f"Success at iteration: {itr}"
+                print(msg)
                 with open(log_file, 'a') as f:
-                    f.write(f"Success at iteration: {itr}\n")
-                return remaining_circs[lcb_idx]
-            y = np.append(y, lcb_score)
-            X.append(remaining_circs[lcb_idx])
-            remaining_circs.pop(lcb_idx)
+                    f.write(msg + "\n")
+                return remaining_circs[selected_idx]
+            y = np.append(y, new_score)
+            X.append(remaining_circs[selected_idx])
+            remaining_circs.pop(selected_idx)
         print("Solution not found")
         return best_circ
 
@@ -529,8 +567,16 @@ class qgd_SurSearch:
             best = min(best, score)
         return best
 
-    def lcb(self,mu,std):
-        return mu - self.kappa*std
+    def lcb(self, mu, std):
+        return mu - self.kappa * std
+
+    def ei(self, log_mu_norm, log_std_norm, log_y_best_norm):
+        """Negative Expected Improvement in z-scored log10 space (use argmin to select)."""
+        from scipy.stats import norm as scipy_norm
+        z = (log_y_best_norm - log_mu_norm) / (log_std_norm + 1e-9)
+        ei_val = ((log_y_best_norm - log_mu_norm) * scipy_norm.cdf(z)
+                  + log_std_norm * scipy_norm.pdf(z))
+        return -np.maximum(ei_val, 0.0)
 
 
 if __name__ == "__main__":
