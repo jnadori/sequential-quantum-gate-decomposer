@@ -97,14 +97,10 @@ void Optimization_Interface::solve_layer_optimization_problem_POSMM( int num_of_
 
         double radius_base=0.5;
         if ( config.count("radius_base_posmm") > 0 ) {
-             long long value3 = 1;
-             config["radius_base_posmm"].get_property( value3 ); 
-             radius_base = (double) value3;
+             config["radius_base_posmm"].get_property( radius_base );
         }
         if ( config.count("radius_base") > 0 ) {
-             long long value2 = 1;
-             config["radius_base"].get_property( value2 ); 
-             radius_base = (double) value2;
+             config["radius_base"].get_property( radius_base );
         }
 
         double optimization_tolerance_loc;
