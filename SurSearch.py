@@ -7,7 +7,6 @@ import numpy as np
 from scipy.optimize import minimize
 from multiprocessing import Pool
 from squander import N_Qubit_Decomposition_custom, Circuit
-from squander.synthesis.qgd_POSMM import qgd_POSMM_Decomposition
 
 from math import ceil
 import heapq
@@ -176,12 +175,18 @@ class GPRegressor:
     kernel_params: Array
     noise: float = 1e-3
     jitter: float = 1e-8
+    kernel_fn: Optional[Any] = None
 
     # Learned during fit:
     F_train: Optional[Array] = None
     y_train: Optional[Array] = None
     L: Optional[Array] = None
     alpha: Optional[Array] = None
+
+    def _kernel(self, F1: Array, F2: Array) -> Array:
+        if self.kernel_fn is not None:
+            return self.kernel_fn(F1, F2, self.kernel_params)
+        return pairwise_kernel_matrix(F1, F2, self.kernel_params)
 
     def fit(self, F: Array, y: Array) -> "GPRegressor":
         """Fit GP on precomputed feature matrix F (n, d) and targets y."""
@@ -193,7 +198,7 @@ class GPRegressor:
         self.F_train = F
         self.y_train = y
 
-        K = pairwise_kernel_matrix(F, F, self.kernel_params)
+        K = self._kernel(F, F)
         K = self._add_diagonal_noise(K, self.noise, self.jitter)
 
         jitter = self.jitter
@@ -222,7 +227,7 @@ class GPRegressor:
             raise RuntimeError("Model is not properly fit (missing L/alpha).")
 
         F_star = np.asarray(F_star, dtype=float)
-        Ks = pairwise_kernel_matrix(self.F_train, F_star, self.kernel_params)
+        Ks = self._kernel(self.F_train, F_star)
         mean = Ks.T @ self.alpha  # (n_star,)
 
         if not return_std:
@@ -251,7 +256,7 @@ class GPRegressor:
         F = self.F_train
         y = self.y_train
 
-        K = pairwise_kernel_matrix(F, F, self.kernel_params)
+        K = self._kernel(F, F)
         K = self._add_diagonal_noise(K, self.noise, self.jitter)
 
         L = np.linalg.cholesky(K)
@@ -362,6 +367,160 @@ def circuit_features(x, edges, n_qubits):
     return np.concatenate([edge_freq, bigram, qubit_act, [consec, unique_frac]])
 
 
+def circuit_to_dag(x, n_qubits):
+    """Build predecessor/successor adjacency lists for a gate interaction DAG.
+
+    Each gate is a node; directed edges connect immediate qubit-sharing predecessors
+    to successors (gate j -> gate i if they share a qubit and j is the most recent
+    such predecessor).
+
+    Returns (predecessors, successors) — lists of lists of node indices.
+    """
+    n = len(x)
+    predecessors = [[] for _ in range(n)]
+    successors = [[] for _ in range(n)]
+    last_on_qubit = [None] * n_qubits
+
+    for i in range(n):
+        pred_set = set()
+        for q in x[i]:
+            if last_on_qubit[q] is not None:
+                pred_set.add(last_on_qubit[q])
+        for j in pred_set:
+            predecessors[i].append(j)
+            successors[j].append(i)
+        for q in x[i]:
+            last_on_qubit[q] = i
+
+    return predecessors, successors
+
+
+def wl_feature_matrix(circuits, n_qubits, h_iters=3):
+    """Compute Weisfeiler-Leman feature vectors for all circuits.
+
+    Uses directed WL: node labels are refined by separately aggregating
+    predecessor and successor label multisets. Returns a (n_circuits, vocab_size)
+    dense numpy array where each row is a histogram over WL labels across all
+    iterations.
+    """
+    n_circuits = len(circuits)
+
+    # Build DAGs for all circuits
+    dags = [circuit_to_dag(c, n_qubits) for c in circuits]
+
+    # Iteration 0: initial labels from gate edge tuples
+    # labels[c][i] = label string for node i in circuit c
+    labels = []
+    for c in circuits:
+        labels.append([str(c[i]) for i in range(len(c))])
+
+    label_vocab = {}
+    # Accumulate histograms: list of dicts mapping label_id -> count
+    histograms = [{} for _ in range(n_circuits)]
+
+    def get_label_id(label_str):
+        if label_str not in label_vocab:
+            label_vocab[label_str] = len(label_vocab)
+        return label_vocab[label_str]
+
+    # Record iteration 0 labels
+    for ci in range(n_circuits):
+        for i in range(len(circuits[ci])):
+            lid = get_label_id(labels[ci][i])
+            histograms[ci][lid] = histograms[ci].get(lid, 0) + 1
+
+    # WL iterations
+    for _ in range(h_iters):
+        new_labels = []
+        for ci in range(n_circuits):
+            preds, succs = dags[ci]
+            n = len(circuits[ci])
+            new_lab = [None] * n
+            for i in range(n):
+                pred_labels = sorted(labels[ci][j] for j in preds[i])
+                succ_labels = sorted(labels[ci][j] for j in succs[i])
+                new_lab[i] = labels[ci][i] + "<" + ",".join(pred_labels) + ">" + ",".join(succ_labels)
+            new_labels.append(new_lab)
+
+        labels = new_labels
+
+        # Record this iteration's labels
+        for ci in range(n_circuits):
+            for i in range(len(circuits[ci])):
+                lid = get_label_id(labels[ci][i])
+                histograms[ci][lid] = histograms[ci].get(lid, 0) + 1
+
+    # Build dense feature matrix
+    vocab_size = len(label_vocab)
+    feat = np.zeros((n_circuits, vocab_size), dtype=float)
+    for ci in range(n_circuits):
+        for lid, count in histograms[ci].items():
+            feat[ci, lid] = count
+
+    return feat
+
+
+def ssk_kernel_value(s1, s2, D, match_sq):
+    """Compute SSK kernel between two equal-length sequences.
+
+    Uses the matrix DP from Moss et al. (BOSS). D is the pre-computed gap decay
+    matrix (strictly upper triangular) and match_sq = match_decay ** 2.
+
+    The kernel sums contributions from all subsequence orders 1 through
+    len(D)+1, with equal weights (order_coefs = 1).
+    """
+    n = len(s1)
+
+    # Match indicator matrix
+    S = np.zeros((n, n))
+    for i in range(n):
+        for j in range(n):
+            if s1[i] == s2[j]:
+                S[i, j] = 1.0
+
+    Kp = np.ones((n, n))
+    k = match_sq * float(np.sum(S * Kp))
+
+    order = D.shape[0]
+    for _ in range(order - 1):
+        Kpp = match_sq * ((S * Kp) @ D)
+        Kp = (Kpp.T @ D).T
+        k += match_sq * float(np.sum(S * Kp))
+
+    return k
+
+
+def ssk_gram_matrix(circuits, gap_decay, match_decay, order):
+    """Compute the full SSK Gram matrix for a list of equal-length circuits.
+
+    Returns an (n_circuits, n_circuits) symmetric positive-semidefinite matrix
+    and its row-normalized version (kernel values divided by sqrt of diagonals).
+    """
+    n_circuits = len(circuits)
+    n = len(circuits[0])
+    match_sq = match_decay * match_decay
+
+    # Gap decay matrix (strictly upper triangular):
+    # D[i,j] = gap_decay^(j-i-1) for j > i, 0 otherwise.
+    # This penalises gaps between matched positions while allowing
+    # adjacent positions (gap 0) to contribute with weight 1.
+    idx = np.arange(n)
+    D = np.where(idx[None, :] > idx[:, None],
+                 gap_decay ** (idx[None, :] - idx[:, None] - 1), 0.0)
+
+    K = np.zeros((n_circuits, n_circuits))
+    for i in range(n_circuits):
+        for j in range(i, n_circuits):
+            val = ssk_kernel_value(circuits[i], circuits[j], D, match_sq)
+            K[i, j] = val
+            K[j, i] = val
+
+    # Normalise: K_norm[i,j] = K[i,j] / sqrt(K[i,i] * K[j,j])
+    diag = np.sqrt(np.diag(K))
+    diag[diag < 1e-12] = 1.0
+    K_norm = K / (diag[:, None] * diag[None, :])
+    return K_norm
+
 
 def decompose_old(Umtx, x):
     config = {'use_basin_hopping': 1, 'bh_T': 1.1375279022671254, 'bh_stepsize': 0.9200273804590016, 'bh_interval': 94, 'bh_target_accept_rate': 0.5661497388955112, 'bh_stepwise_factor': 0.5557762288919466}
@@ -400,7 +559,7 @@ class qgd_SurSearch:
 
         circuits = unique_k_sequences(self.topology, self.D)
         edges = sorted(set(tuple(e) for e in self.topology))
-        acquisition = self.config.get('acquisition', 'EI')
+        acquisition = self.config.get('acquisition', 'LCB')
         tolerance = self.config.get('tolerance', 1e-8)
         max_iters = self.config.get('max_sur_iters', 1000)
         X0_size = self.config.get('X0_size', 5)
@@ -411,21 +570,48 @@ class qgd_SurSearch:
         gp_noise = None
         gp_bounds = None
         feat_dim = None
+        gp_kernel_fn = None
 
         if acquisition in ('EI', 'LCB'):
-            raw = {tuple(c): circuit_features(c, edges, self.N) for c in circuits}
-            all_feats = np.array(list(raw.values()))
-            feat_mean = all_feats.mean(axis=0)
-            feat_std = all_feats.std(axis=0)
-            feat_std[feat_std < 1e-12] = 1.0
-            feature_cache = {k: (v - feat_mean) / feat_std for k, v in raw.items()}
-            all_standardized = np.array(list(feature_cache.values()))
-            median_dist = float(np.median(pdist(all_standardized, 'euclidean')))
-            log_median = np.log(max(median_dist, 1e-6))
-            feat_dim = all_feats.shape[1]
-            gp_kernel_params = np.array([0.0, log_median])
-            gp_noise = 1e-2
-            gp_bounds = [(-3.0, 3.0), (log_median - 3.0, log_median + 3.0)]
+            kernel_type = self.config.get('kernel', 'handcrafted')
+
+            if kernel_type == 'ssk':
+                gap_decay = self.config.get('ssk_gap_decay', 0.8)
+                match_decay = self.config.get('ssk_match_decay', 0.8)
+                ssk_order = self.config.get('ssk_order', 3)
+                K_ssk = ssk_gram_matrix(circuits, gap_decay, match_decay, ssk_order)
+                feature_cache = {tuple(c): np.array([float(i)]) for i, c in enumerate(circuits)}
+                feat_dim = K_ssk.shape[1]
+                gp_kernel_params = np.array([0.0])  # log_scale only
+                gp_noise = 1e-2
+                gp_bounds = [(-3.0, 3.0)]
+
+                def _ssk_kernel_fn(F1, F2, params):
+                    scale = float(np.exp(params[0]))
+                    idx1 = F1[:, 0].astype(int)
+                    idx2 = F2[:, 0].astype(int)
+                    return scale * K_ssk[np.ix_(idx1, idx2)]
+
+                gp_kernel_fn = _ssk_kernel_fn
+            else:
+                if kernel_type == 'wl':
+                    h_iters = self.config.get('wl_iters', 3)
+                    all_feats_raw = wl_feature_matrix(circuits, self.N, h_iters=h_iters)
+                    raw = {tuple(circuits[i]): all_feats_raw[i] for i in range(len(circuits))}
+                else:
+                    raw = {tuple(c): circuit_features(c, edges, self.N) for c in circuits}
+                all_feats = np.array(list(raw.values()))
+                feat_mean = all_feats.mean(axis=0)
+                feat_std = all_feats.std(axis=0)
+                feat_std[feat_std < 1e-12] = 1.0
+                feature_cache = {k: (v - feat_mean) / feat_std for k, v in raw.items()}
+                all_standardized = np.array(list(feature_cache.values()))
+                median_dist = float(np.median(pdist(all_standardized, 'euclidean')))
+                log_median = np.log(max(median_dist, 1e-6))
+                feat_dim = all_feats.shape[1]
+                gp_kernel_params = np.array([0.0, log_median])
+                gp_noise = 1e-2
+                gp_bounds = [(-3.0, 3.0), (log_median - 3.0, log_median + 3.0)]
 
             def _feature_matrix(circs):
                 return np.array([feature_cache[tuple(c)] for c in circs])
@@ -477,6 +663,7 @@ class qgd_SurSearch:
                 gp = GPRegressor(
                     kernel_params=gp_kernel_params.copy(),
                     noise=gp_noise,
+                    kernel_fn=gp_kernel_fn,
                 ).fit(F_train, log_y_norm)
                 try:
                     gp.optimize_hyperparameters(n_restarts=2, kernel_bounds=gp_bounds,
@@ -486,7 +673,7 @@ class qgd_SurSearch:
                 gp_kernel_params = gp.kernel_params.copy()
                 gp_noise = gp.noise
                 gp_scale_disp = float(np.exp(gp_kernel_params[0]))
-                gp_ls_disp = float(np.exp(gp_kernel_params[1]))
+                gp_ls_disp = float(np.exp(gp_kernel_params[1])) if len(gp_kernel_params) > 1 else float('nan')
                 gp_noise_disp = gp_noise
 
                 log_mu_norm, log_std_norm = gp.predict(F_remaining, return_std=True,
@@ -542,16 +729,19 @@ class qgd_SurSearch:
 
     def decompose(self, x, pool=None):
         ansatz = create_circuit_from_edges(x, self.N)
-        if self.config.get('optimizer') == 'POSMM':
-            posmm = qgd_POSMM_Decomposition(
-                self.Umtx.conj().T,
-                ansatz,
-                self.config.get('rconstant', 0.5),
-                self.config,
-                pool=pool,
-            )
-            _, score = posmm.Start_decomposition()
-            return score
+        optimizer = self.config.get('optimizer', 'BFGS')
+        if optimizer == 'POSMM':
+            config = dict(self.config)
+            config.setdefault('radius_base', config.get('rconstant', 0.5))
+            cDecomp = N_Qubit_Decomposition_custom(self.Umtx.conj().T, config=config)
+            cDecomp.set_Verbose(0)
+            cDecomp.set_Cost_Function_Variant(3)
+            cDecomp.set_Gate_Structure(ansatz)
+            cDecomp.set_Optimized_Parameters(np.random.rand(ansatz.get_Parameter_Num()) * 2 * np.pi)
+            cDecomp.set_Optimizer("POSMM")
+            cDecomp.Start_Decomposition()
+            params = cDecomp.get_Optimized_Parameters()
+            return cDecomp.Optimization_Problem(params)
         n_restarts = self.config.get('decompose_restarts', 3)
         best = float('inf')
         for _ in range(n_restarts):
@@ -560,7 +750,7 @@ class qgd_SurSearch:
             cDecomp.set_Cost_Function_Variant(3)
             cDecomp.set_Gate_Structure(ansatz)
             cDecomp.set_Optimized_Parameters(np.random.rand(ansatz.get_Parameter_Num()) * 2 * np.pi)
-            cDecomp.set_Optimizer(self.config.get('optimizer', 'BFGS'))
+            cDecomp.set_Optimizer(optimizer)
             cDecomp.Start_Decomposition()
             params = cDecomp.get_Optimized_Parameters()
             score = cDecomp.Optimization_Problem(params)
