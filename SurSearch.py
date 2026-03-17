@@ -521,21 +521,6 @@ def ssk_gram_matrix(circuits, gap_decay, match_decay, order):
     K_norm = K / (diag[:, None] * diag[None, :])
     return K_norm
 
-
-def decompose_old(Umtx, x):
-    config = {'use_basin_hopping': 1, 'bh_T': 1.1375279022671254, 'bh_stepsize': 0.9200273804590016, 'bh_interval': 94, 'bh_target_accept_rate': 0.5661497388955112, 'bh_stepwise_factor': 0.5557762288919466}
-    N = int(np.log2(Umtx.shape[0]))
-    ansatz = create_circuit_from_edges(x,N)
-    cDecomp = N_Qubit_Decomposition_custom(Umtx.conj().T,config=config)
-    cDecomp.set_Verbose(0)
-    cDecomp.set_Cost_Function_Variant(3)
-    cDecomp.set_Gate_Structure(ansatz)
-    cDecomp.set_Optimized_Parameters(np.random.rand(ansatz.get_Parameter_Num())*2*np.pi)
-    cDecomp.set_Optimizer("BFGS2")
-    cDecomp.Start_Decomposition()
-    params = cDecomp.get_Optimized_Parameters()
-    return cDecomp.Optimization_Problem(params)
-
 def generate_goal_unitary(N, edges):
     goal = create_circuit_from_edges(edges,N)
     return goal.get_Matrix(np.random.rand(goal.get_Parameter_Num())*2*np.pi)
@@ -742,20 +727,15 @@ class qgd_SurSearch:
             cDecomp.Start_Decomposition()
             params = cDecomp.get_Optimized_Parameters()
             return cDecomp.Optimization_Problem(params)
-        n_restarts = self.config.get('decompose_restarts', 3)
-        best = float('inf')
-        for _ in range(n_restarts):
-            cDecomp = N_Qubit_Decomposition_custom(self.Umtx.conj().T, config=self.config)
-            cDecomp.set_Verbose(0)
-            cDecomp.set_Cost_Function_Variant(3)
-            cDecomp.set_Gate_Structure(ansatz)
-            cDecomp.set_Optimized_Parameters(np.random.rand(ansatz.get_Parameter_Num()) * 2 * np.pi)
-            cDecomp.set_Optimizer(optimizer)
-            cDecomp.Start_Decomposition()
-            params = cDecomp.get_Optimized_Parameters()
-            score = cDecomp.Optimization_Problem(params)
-            best = min(best, score)
-        return best
+        cDecomp = N_Qubit_Decomposition_custom(self.Umtx.conj().T, config=self.config)
+        cDecomp.set_Verbose(0)
+        cDecomp.set_Cost_Function_Variant(3)
+        cDecomp.set_Gate_Structure(ansatz)
+        cDecomp.set_Optimized_Parameters(np.random.rand(ansatz.get_Parameter_Num()) * 2 * np.pi)
+        cDecomp.set_Optimizer(optimizer)
+        cDecomp.Start_Decomposition()
+        params = cDecomp.get_Optimized_Parameters()
+        return cDecomp.Optimization_Problem(params)
 
     def lcb(self, mu, std):
         return mu - self.kappa * std
