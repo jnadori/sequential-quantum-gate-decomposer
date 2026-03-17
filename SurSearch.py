@@ -570,6 +570,7 @@ class qgd_SurSearch:
                 gp_kernel_params = np.array([0.0])  # log_scale only
                 gp_noise = 1e-2
                 gp_bounds = [(-3.0, 3.0)]
+                gp_noise_bounds = (-8.0, -1.0)  # max noise=0.37 forces kernel to explain data
 
                 def _ssk_kernel_fn(F1, F2, params):
                     scale = float(np.exp(params[0]))
@@ -597,6 +598,7 @@ class qgd_SurSearch:
                 gp_kernel_params = np.array([0.0, log_median])
                 gp_noise = 1e-2
                 gp_bounds = [(-3.0, 3.0), (log_median - 3.0, log_median + 3.0)]
+                gp_noise_bounds = (-8.0, 0.0)
 
             def _feature_matrix(circs):
                 return np.array([feature_cache[tuple(c)] for c in circs])
@@ -650,13 +652,21 @@ class qgd_SurSearch:
                     noise=gp_noise,
                     kernel_fn=gp_kernel_fn,
                 ).fit(F_train, log_y_norm)
+                n_restarts = max(2, 8 - len(X) // 5)
                 try:
-                    gp.optimize_hyperparameters(n_restarts=2, kernel_bounds=gp_bounds,
-                                                noise_bounds=(-8.0, 0.0))
+                    gp.optimize_hyperparameters(n_restarts=n_restarts, kernel_bounds=gp_bounds,
+                                                noise_bounds=gp_noise_bounds)
                 except Exception:
                     pass
-                gp_kernel_params = gp.kernel_params.copy()
-                gp_noise = gp.noise
+                # Collapse detection: if scale/noise ratio is tiny, reset warm-start
+                opt_scale = float(np.exp(gp.kernel_params[0]))
+                opt_noise = float(gp.noise)
+                if opt_scale / max(opt_noise, 1e-12) < 0.1:
+                    gp_kernel_params = np.array([0.0]) if kernel_type == 'ssk' else np.array([0.0, gp_kernel_params[1]])
+                    gp_noise = 1e-2
+                else:
+                    gp_kernel_params = gp.kernel_params.copy()
+                    gp_noise = gp.noise
                 gp_scale_disp = float(np.exp(gp_kernel_params[0]))
                 gp_ls_disp = float(np.exp(gp_kernel_params[1])) if len(gp_kernel_params) > 1 else float('nan')
                 gp_noise_disp = gp_noise
