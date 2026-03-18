@@ -422,6 +422,9 @@ void Optimization_Interface::solve_layer_optimization_problem( int num_of_parame
         case POSMM:
             solve_layer_optimization_problem_POSMM( num_of_parameters, solution_guess);
             return;
+        case AGENTS_BFGS:
+            solve_layer_optimization_problem_AGENTS_BFGS( num_of_parameters, solution_guess);
+            return;
         default:
             std::string error("Optimization_Interface::solve_layer_optimization_problem: unimplemented optimization algorithm");
             throw error;
@@ -1389,8 +1392,13 @@ void Optimization_Interface::set_optimizer( optimization_aglorithms alg_in ) {
             return;
         case POSMM:
             max_inner_iterations = 10000;
-            random_shift_count_max = 1;  
-            max_outer_iterations = 100000000; 
+            random_shift_count_max = 1;
+            max_outer_iterations = 100000000;
+            return;
+        case AGENTS_BFGS:
+            max_inner_iterations = 5000;
+            random_shift_count_max = 10;
+            max_outer_iterations = 1;
             return;
         default:
             std::string error("Optimization_Interface::set_optimizer: unimplemented optimization algorithm");
