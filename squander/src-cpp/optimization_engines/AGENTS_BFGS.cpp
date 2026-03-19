@@ -30,6 +30,7 @@ limitations under the License.
 
 #include <fstream>
 #include <algorithm>
+#include <random>
 
 
 #ifdef __DFE__
@@ -252,13 +253,13 @@ void Optimization_Interface::solve_layer_optimization_problem_AGENTS_BFGS( int n
         }
 
         // AGENTS_BFGS-specific config: BFGS polish iterations
-        long long bfgs_polish_iters_agent = 500;
+        long long bfgs_polish_iters_agent = 2000;
         if ( config.count("bfgs_polish_iters_agent") > 0 ) {
              config["bfgs_polish_iters_agent"].get_property( bfgs_polish_iters_agent );
         }
 
         // AGENTS_BFGS-specific config: number of top agents to BFGS-polish
-        int bfgs_polish_top_k = 5;
+        int bfgs_polish_top_k = 8;
         if ( config.count("bfgs_polish_top_k_agent") > 0 ) {
              long long value;
              config["bfgs_polish_top_k_agent"].get_property( value );
@@ -266,8 +267,8 @@ void Optimization_Interface::solve_layer_optimization_problem_AGENTS_BFGS( int n
         }
         if ( bfgs_polish_top_k > agent_num ) bfgs_polish_top_k = agent_num;
 
-        // AGENTS_BFGS-specific config: how often to run BFGS polish (default: half the agent lifetime)
-        int bfgs_polish_period = agent_lifetime_loc / 2;
+        // AGENTS_BFGS-specific config: how often to run BFGS polish (default: quarter the agent lifetime)
+        int bfgs_polish_period = agent_lifetime_loc / 4;
         if ( config.count("bfgs_polish_period_agent") > 0 ) {
              long long value;
              config["bfgs_polish_period_agent"].get_property( value );
@@ -284,20 +285,101 @@ void Optimization_Interface::solve_layer_optimization_problem_AGENTS_BFGS( int n
         }
         if ( rediversify_keep_top_agent > agent_num ) rediversify_keep_top_agent = agent_num;
 
-        // Final BFGS sweep: iterations per candidate
-        long long bfgs_final_iters_agent = 2000;
-        if ( config.count("bfgs_final_iters_agent") > 0 ) {
-             config["bfgs_final_iters_agent"].get_property( bfgs_final_iters_agent );
+
+        // BFGS polish: minimum improvement to avoid re-polishing stale agents
+        double bfgs_polish_min_improvement_agent = 1e-4;
+        if ( config.count("bfgs_polish_min_improvement_agent") > 0 ) {
+             config["bfgs_polish_min_improvement_agent"].get_property( bfgs_polish_min_improvement_agent );
         }
 
-        // Final BFGS sweep: number of top diverse candidates
-        int bfgs_final_top_k_agent = 10;
-        if ( config.count("bfgs_final_top_k_agent") > 0 ) {
+        // Two-phase design: cosine scout iterations (Phase 1 cap)
+        // Default: 3 agent lifetimes or max_inner_iterations, whichever is smaller
+        int cosine_scout_iters_agent = std::min(max_inner_iterations_loc, agent_lifetime_loc * 3);
+        if ( config.count("cosine_scout_iters_agent") > 0 ) {
              long long value;
-             config["bfgs_final_top_k_agent"].get_property( value );
-             bfgs_final_top_k_agent = (int) value;
+             config["cosine_scout_iters_agent"].get_property( value );
+             cosine_scout_iters_agent = (int) value;
         }
-        if ( bfgs_final_top_k_agent > agent_num ) bfgs_final_top_k_agent = agent_num;
+
+        // Stagnation detector: check period (default: quarter the agent lifetime)
+        int stagnation_check_period_agent = agent_lifetime_loc / 4;
+        if ( config.count("stagnation_check_period_agent") > 0 ) {
+             long long value;
+             config["stagnation_check_period_agent"].get_property( value );
+             stagnation_check_period_agent = (int) value;
+        }
+        if ( stagnation_check_period_agent < 1 ) stagnation_check_period_agent = 1;
+
+        // Stagnation detector: relative improvement threshold (default: 0.1%)
+        double stagnation_threshold_agent = 1e-3;
+        if ( config.count("stagnation_threshold_agent") > 0 ) {
+             config["stagnation_threshold_agent"].get_property( stagnation_threshold_agent );
+        }
+
+        // Two-phase design: number of top diverse candidates for Phase 2 BFGS exploit
+        int bfgs_exploit_top_k_agent = 16;
+        if ( config.count("bfgs_exploit_top_k_agent") > 0 ) {
+             long long value;
+             config["bfgs_exploit_top_k_agent"].get_property( value );
+             bfgs_exploit_top_k_agent = (int) value;
+        }
+        if ( bfgs_exploit_top_k_agent > agent_num ) bfgs_exploit_top_k_agent = agent_num;
+
+        // Two-phase design: BFGS iterations per candidate in Phase 2
+        long long bfgs_exploit_iters_agent = 5000;
+        if ( config.count("bfgs_exploit_iters_agent") > 0 ) {
+             config["bfgs_exploit_iters_agent"].get_property( bfgs_exploit_iters_agent );
+        }
+
+        // Visited basins: max size before pruning
+        int max_visited_basins_agent = 200;
+        if ( config.count("max_visited_basins_agent") > 0 ) {
+             long long value;
+             config["max_visited_basins_agent"].get_property( value );
+             max_visited_basins_agent = (int) value;
+        }
+
+        // Basin-hopping: number of hops per candidate in Phase 2
+        int bh_hops_agent = 10;
+        if ( config.count("bh_hops_agent") > 0 ) {
+             long long value;
+             config["bh_hops_agent"].get_property( value );
+             bh_hops_agent = (int) value;
+        }
+
+        // Basin-hopping: Metropolis temperature
+        double bh_T_agent = 1.0;
+        if ( config.count("bh_T_agent") > 0 ) {
+             config["bh_T_agent"].get_property( bh_T_agent );
+        }
+
+        // Basin-hopping: initial perturbation stepsize (fraction of pi)
+        double bh_stepsize_agent = 0.5;
+        if ( config.count("bh_stepsize_agent") > 0 ) {
+             config["bh_stepsize_agent"].get_property( bh_stepsize_agent );
+        }
+
+        // Basin-hopping: stepsize adaptation interval
+        int bh_interval_agent = 5;
+        if ( config.count("bh_interval_agent") > 0 ) {
+             long long value;
+             config["bh_interval_agent"].get_property( value );
+             bh_interval_agent = std::max(1, (int) value);
+        }
+
+        // Basin-hopping: target acceptance rate
+        double bh_target_accept_agent = 0.5;
+        if ( config.count("bh_target_accept_agent") > 0 ) {
+             config["bh_target_accept_agent"].get_property( bh_target_accept_agent );
+        }
+        bh_target_accept_agent = std::min(0.999, std::max(0.001, bh_target_accept_agent));
+
+        // Basin-hopping: stepsize adaptation factor
+        double bh_stepwise_factor_agent = 0.9;
+        if ( config.count("bh_stepwise_factor_agent") > 0 ) {
+             config["bh_stepwise_factor_agent"].get_property( bh_stepwise_factor_agent );
+        }
+        if (!(bh_stepwise_factor_agent > 0.0 && bh_stepwise_factor_agent < 1.0)) bh_stepwise_factor_agent = 0.9;
 
         sstream.str("");
         sstream << "AGENTS_BFGS: number of agents " << agent_num << std::endl;
@@ -308,8 +390,15 @@ void Optimization_Interface::solve_layer_optimization_problem_AGENTS_BFGS( int n
         sstream << "AGENTS_BFGS: bfgs_polish_top_k " << bfgs_polish_top_k << std::endl;
         sstream << "AGENTS_BFGS: bfgs_polish_period " << bfgs_polish_period << std::endl;
         sstream << "AGENTS_BFGS: rediversify_keep_top " << rediversify_keep_top_agent << std::endl;
-        sstream << "AGENTS_BFGS: bfgs_final_iters " << bfgs_final_iters_agent << std::endl;
-        sstream << "AGENTS_BFGS: bfgs_final_top_k " << bfgs_final_top_k_agent << std::endl;
+        sstream << "AGENTS_BFGS: cosine_scout_iters " << cosine_scout_iters_agent << std::endl;
+        sstream << "AGENTS_BFGS: stagnation_check_period " << stagnation_check_period_agent << std::endl;
+        sstream << "AGENTS_BFGS: stagnation_threshold " << stagnation_threshold_agent << std::endl;
+        sstream << "AGENTS_BFGS: bfgs_exploit_top_k " << bfgs_exploit_top_k_agent << std::endl;
+        sstream << "AGENTS_BFGS: bfgs_exploit_iters " << bfgs_exploit_iters_agent << std::endl;
+        sstream << "AGENTS_BFGS: max_visited_basins " << max_visited_basins_agent << std::endl;
+        sstream << "AGENTS_BFGS: bh_hops " << bh_hops_agent << std::endl;
+        sstream << "AGENTS_BFGS: bh_T " << bh_T_agent << std::endl;
+        sstream << "AGENTS_BFGS: bh_stepsize " << bh_stepsize_agent << std::endl;
         print(sstream, 2);
 
 
@@ -323,6 +412,9 @@ void Optimization_Interface::solve_layer_optimization_problem_AGENTS_BFGS( int n
 
         double var_current_minimum = DBL_MAX;
 
+        // Stagnation detector state
+        double best_cost_at_last_check = DBL_MAX;
+        bool phase1_stagnated = false;
 
         matrix_base<int> param_idx_agents( agent_num, 1 );
 
@@ -361,9 +453,12 @@ tbb::tick_count t0_CPU = tbb::tick_count::now();
         //
         double init_radius = radius_base_agent * std::pow(std::log(2.0) / 1.0, 1.0 / (double)num_of_parameters);
 
-        // Store accepted starting points for exclusion checks
-        std::vector<Matrix_real> visited_basins;
+        // Store accepted starting points for exclusion checks (position + cost)
+        std::vector<std::pair<Matrix_real, double>> visited_basins;
         visited_basins.reserve(agent_num);
+
+        // Dedup threshold for visited_basins insertion
+        double visited_basins_dedup_radius = init_radius * 0.5;
 
         for(int agent_idx=0; agent_idx<agent_num; agent_idx++) {
 
@@ -390,7 +485,7 @@ tbb::tick_count t0_CPU = tbb::tick_count::now();
 
                         bool too_close = false;
                         for (int pdx = 0; pdx < (int)visited_basins.size(); pdx++) {
-                            if (calculate_distance(candidate, visited_basins[pdx]) < init_radius) {
+                            if (calculate_distance(candidate, visited_basins[pdx].first) < init_radius) {
                                 too_close = true;
                                 break;
                             }
@@ -418,10 +513,10 @@ tbb::tick_count t0_CPU = tbb::tick_count::now();
             MPI_Bcast( solution_guess_mtx_agent.get_data(), num_of_parameters, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 #endif
 
-            // Track accepted starting point for exclusion
+            // Track accepted starting point for exclusion (cost computed later)
             Matrix_real accepted_copy(1, num_of_parameters);
             memcpy(accepted_copy.get_data(), solution_guess_mtx_agent.get_data(), num_of_parameters * sizeof(double));
-            visited_basins.push_back(accepted_copy);
+            visited_basins.push_back(std::make_pair(accepted_copy, DBL_MAX));
 
             solution_guess_mtx_agents[ agent_idx ] = solution_guess_mtx_agent;
 
@@ -435,6 +530,10 @@ tbb::tick_count t0_CPU = tbb::tick_count::now();
 
         // intitial cost function for each of the agents
         current_minimum_agents = optimization_problem_batched( solution_guess_mtx_agents );
+
+        // Track last polish cost per agent for skip-stale check (Change 3)
+        Matrix_real last_polish_cost_agents(agent_num, 1);
+        for (int i = 0; i < agent_num; i++) last_polish_cost_agents[i] = DBL_MAX;
 
         // arrays to store some parameter values needed to be restored later
         Matrix_real parameter_value_save_agents( agent_num, 1 );
@@ -455,8 +554,11 @@ tbb::tick_count t0_CPU = tbb::tick_count::now();
         // CPU time
         CPU_time += (tbb::tick_count::now() - t0_CPU).seconds();
 
+        // Phase 1 cap: min of max_inner_iterations and cosine_scout_iters
+        long long phase1_iters = std::min((long long)max_inner_iterations_loc, (long long)cosine_scout_iters_agent);
+
         ///////////////////////////////////////////////////////////////////////////
-        for (long long iter_idx=0; iter_idx<max_inner_iterations_loc; iter_idx++) {
+        for (long long iter_idx=0; iter_idx<phase1_iters; iter_idx++) {
 
 
             // CPU time
@@ -804,11 +906,37 @@ tbb::tick_count t0_CPU = tbb::tick_count::now();
                         memcpy(optimized_parameters_mtx.get_data(), solution_guess_mtx_agents[best_agent].get_data(), num_of_parameters * sizeof(double));
                     }
 
-                    // Push all current agent positions into visited_basins
+                    // Push agent positions into visited_basins with deduplication
                     for (int i = 0; i < agent_num; i++) {
                         Matrix_real basin_copy(1, num_of_parameters);
                         memcpy(basin_copy.get_data(), solution_guess_mtx_agents[i].get_data(), num_of_parameters * sizeof(double));
-                        visited_basins.push_back(basin_copy);
+                        double agent_cost = current_minimum_agents[i];
+
+                        // Check for near-duplicate
+                        bool is_dup = false;
+                        for (int vb = 0; vb < (int)visited_basins.size(); vb++) {
+                            if (calculate_distance(basin_copy, visited_basins[vb].first) < visited_basins_dedup_radius) {
+                                // Update cost if better
+                                if (agent_cost < visited_basins[vb].second) {
+                                    visited_basins[vb].second = agent_cost;
+                                    memcpy(visited_basins[vb].first.get_data(), basin_copy.get_data(), num_of_parameters * sizeof(double));
+                                }
+                                is_dup = true;
+                                break;
+                            }
+                        }
+                        if (!is_dup) {
+                            visited_basins.push_back(std::make_pair(basin_copy, agent_cost));
+                        }
+                    }
+
+                    // Cap and prune visited_basins
+                    if ((int)visited_basins.size() > max_visited_basins_agent) {
+                        std::sort(visited_basins.begin(), visited_basins.end(),
+                            [](const std::pair<Matrix_real, double>& a, const std::pair<Matrix_real, double>& b) {
+                                return a.second < b.second;
+                            });
+                        visited_basins.resize(max_visited_basins_agent);
                     }
 
                     // Dynamic exclusion radius
@@ -829,7 +957,7 @@ tbb::tick_count t0_CPU = tbb::tick_count::now();
 
                             bool too_close = false;
                             for (int pdx = 0; pdx < (int)visited_basins.size(); pdx++) {
-                                if (calculate_distance(candidate, visited_basins[pdx]) < rediv_radius) {
+                                if (calculate_distance(candidate, visited_basins[pdx].first) < rediv_radius) {
                                     too_close = true;
                                     break;
                                 }
@@ -940,6 +1068,20 @@ tbb::tick_count t0_CPU = tbb::tick_count::now();
                             terminate_optimization = true;
                         }
 
+                        // Stagnation detector: if best cost hasn't improved by relative threshold, exit Phase 1
+                        if ( !terminate_optimization && iter_idx > 0 && iter_idx % stagnation_check_period_agent == 0 ) {
+                            double relative_improvement = (best_cost_at_last_check - current_minimum) / (std::abs(best_cost_at_last_check) + 1e-30);
+                            if ( relative_improvement < stagnation_threshold_agent && iter_idx >= stagnation_check_period_agent ) {
+                                std::stringstream sstream;
+                                sstream << "AGENTS_BFGS: Phase 1 stagnation detected at iter " << iter_idx
+                                        << ", best cost " << current_minimum
+                                        << ", improvement " << relative_improvement << std::endl;
+                                print(sstream, 3);
+                                phase1_stagnated = true;
+                            }
+                            best_cost_at_last_check = current_minimum;
+                        }
+
                     }
 
 
@@ -980,16 +1122,37 @@ CPU_time += (tbb::tick_count::now() - t0_CPU).seconds();
 
                     int polish_agent = sorted_agent_indices[k_idx];
 
+                    // Skip stale agents that haven't improved since last polish
+                    if (std::abs(current_minimum_agents[polish_agent] - last_polish_cost_agents[polish_agent]) < bfgs_polish_min_improvement_agent) {
+                        continue;
+                    }
+
                     Matrix_real bfgs_params(1, num_of_parameters);
                     memcpy(bfgs_params.get_data(), solution_guess_mtx_agents[polish_agent].get_data(), num_of_parameters * sizeof(double));
 
                     BFGS_Powell cBFGS_Powell(optimization_problem_combined, this);
                     double bfgs_result = cBFGS_Powell.Start_Optimization(bfgs_params, (long)bfgs_polish_iters_agent);
 
-                    // Push polished position into visited_basins
+                    // Record polish cost for skip-stale tracking
+                    last_polish_cost_agents[polish_agent] = bfgs_result;
+
+                    // Push polished position into visited_basins with dedup
                     Matrix_real polished_copy(1, num_of_parameters);
                     memcpy(polished_copy.get_data(), bfgs_params.get_data(), num_of_parameters * sizeof(double));
-                    visited_basins.push_back(polished_copy);
+                    bool is_dup = false;
+                    for (int vb = 0; vb < (int)visited_basins.size(); vb++) {
+                        if (calculate_distance(polished_copy, visited_basins[vb].first) < visited_basins_dedup_radius) {
+                            if (bfgs_result < visited_basins[vb].second) {
+                                visited_basins[vb].second = bfgs_result;
+                                memcpy(visited_basins[vb].first.get_data(), polished_copy.get_data(), num_of_parameters * sizeof(double));
+                            }
+                            is_dup = true;
+                            break;
+                        }
+                    }
+                    if (!is_dup) {
+                        visited_basins.push_back(std::make_pair(polished_copy, bfgs_result));
+                    }
 
                     if (bfgs_result < current_minimum_agents[polish_agent]) {
                         // Update agent state with improved parameters
@@ -1002,7 +1165,7 @@ CPU_time += (tbb::tick_count::now() - t0_CPU).seconds();
                             memcpy(optimized_parameters_mtx.get_data(), bfgs_params.get_data(), num_of_parameters * sizeof(double));
                             most_successfull_agent = polish_agent;
 
-                            // Change 3: Reset convergence tracker — BFGS is actively improving
+                            // Reset convergence tracker — BFGS is actively improving
                             memset(current_minimum_vec.get_data(), 0, current_minimum_vec.size() * sizeof(double));
                             current_minimum_mean = 0.0;
                         }
@@ -1016,7 +1179,7 @@ CPU_time += (tbb::tick_count::now() - t0_CPU).seconds();
 
 
             // terminate the agent if the whole optimization problem was solved
-            if ( terminate_optimization ) {
+            if ( terminate_optimization || phase1_stagnated ) {
                 break;
             }
 
@@ -1024,55 +1187,163 @@ CPU_time += (tbb::tick_count::now() - t0_CPU).seconds();
 
 
         //
-        // Change 2: Final aggressive BFGS sweep
+        // Phase 2: Multi-start basin-hopping on top diverse candidates
         //
-        if ( current_minimum >= optimization_tolerance_loc ) {
+        if ( current_minimum >= optimization_tolerance_loc && !terminate_optimization ) {
+            // Recalculate costs
+            current_minimum_agents = optimization_problem_batched( solution_guess_mtx_agents );
+
             // Sort agents by cost (ascending)
-            std::vector<int> final_sorted(agent_num);
-            for (int i = 0; i < agent_num; i++) final_sorted[i] = i;
-            std::sort(final_sorted.begin(), final_sorted.end(),
+            std::vector<int> bh_sorted(agent_num);
+            for (int i = 0; i < agent_num; i++) bh_sorted[i] = i;
+            std::sort(bh_sorted.begin(), bh_sorted.end(),
                 [&](int a, int b) { return current_minimum_agents[a] < current_minimum_agents[b]; });
 
-            // Select top-K that are sufficiently spread apart
-            double final_diversity_threshold = radius_base_agent * 0.5;
-            std::vector<int> final_candidates;
-            for (int i = 0; i < agent_num && (int)final_candidates.size() < bfgs_final_top_k_agent; i++) {
-                int cidx = final_sorted[i];
+            // Select top-K diverse candidates
+            double bh_diversity_threshold = radius_base_agent * 0.5;
+            std::vector<int> bh_candidates;
+            for (int i = 0; i < agent_num && (int)bh_candidates.size() < bfgs_exploit_top_k_agent; i++) {
+                int cidx = bh_sorted[i];
                 bool diverse = true;
-                for (int j = 0; j < (int)final_candidates.size(); j++) {
-                    if (calculate_distance(solution_guess_mtx_agents[cidx], solution_guess_mtx_agents[final_candidates[j]]) < final_diversity_threshold) {
+                for (int j = 0; j < (int)bh_candidates.size(); j++) {
+                    if (calculate_distance(solution_guess_mtx_agents[cidx], solution_guess_mtx_agents[bh_candidates[j]]) < bh_diversity_threshold) {
                         diverse = false;
                         break;
                     }
                 }
                 if (diverse) {
-                    final_candidates.push_back(cidx);
+                    bh_candidates.push_back(cidx);
                 }
             }
 
+            int64_t num_bh = (int64_t)bh_candidates.size();
+
             sstream.str("");
-            sstream << "AGENTS_BFGS: final sweep with " << final_candidates.size() << " diverse candidates, " << bfgs_final_iters_agent << " iters each" << std::endl;
+            sstream << "AGENTS_BFGS: Phase 2 basin-hopping with " << num_bh << " diverse candidates, "
+                    << bh_hops_agent << " hops, " << bfgs_exploit_iters_agent << " BFGS iters each" << std::endl;
             print(sstream, 3);
 
-            for (int fc = 0; fc < (int)final_candidates.size(); fc++) {
-                int cidx = final_candidates[fc];
+            // Pre-copy starting points and allocate per-candidate results
+            std::vector<Matrix_real> bh_start_params(num_bh);
+            std::vector<Matrix_real> bh_best_params(num_bh);
+            std::vector<double> bh_best_scores(num_bh);
+            for (int64_t i = 0; i < num_bh; i++) {
+                int cidx = bh_candidates[i];
+                bh_start_params[i] = Matrix_real(1, num_of_parameters);
+                memcpy(bh_start_params[i].get_data(), solution_guess_mtx_agents[cidx].get_data(), num_of_parameters * sizeof(double));
+                bh_best_params[i] = Matrix_real(1, num_of_parameters);
+                memcpy(bh_best_params[i].get_data(), bh_start_params[i].get_data(), num_of_parameters * sizeof(double));
+                bh_best_scores[i] = current_minimum_agents[cidx];
+            }
 
-                Matrix_real bfgs_params(1, num_of_parameters);
-                memcpy(bfgs_params.get_data(), solution_guess_mtx_agents[cidx].get_data(), num_of_parameters * sizeof(double));
+            int parallel_bh = get_parallel_configuration();
+            int64_t work_batch_bh = 1;
+            if (parallel_bh == 0) {
+                work_batch_bh = num_bh;
+            }
 
-                BFGS_Powell cBFGS_Powell(optimization_problem_combined, this);
-                double bfgs_result = cBFGS_Powell.Start_Optimization(bfgs_params, (long)bfgs_final_iters_agent);
+            volatile bool bh_solution_found = false;
 
-                if (bfgs_result < current_minimum) {
-                    current_minimum = bfgs_result;
-                    memcpy(optimized_parameters_mtx.get_data(), bfgs_params.get_data(), num_of_parameters * sizeof(double));
+            tbb::parallel_for(
+                tbb::blocked_range<int64_t>(0, num_bh, work_batch_bh),
+                [&](tbb::blocked_range<int64_t> r) {
+                    std::mt19937 local_gen(gen() + r.begin());
+                    std::uniform_real_distribution<> local_uniform(0.0, 1.0);
+
+                    for (int64_t i = r.begin(); i < r.end(); i++) {
+                        if (bh_solution_found) break;
+
+                        // Basin-hopping state for this candidate
+                        Matrix_real x_current(1, num_of_parameters);
+                        memcpy(x_current.get_data(), bh_start_params[i].get_data(), num_of_parameters * sizeof(double));
+
+                        // Initial BFGS polish of starting point
+                        BFGS_Powell cBFGS_init(optimization_problem_combined, this);
+                        double f_current = cBFGS_init.Start_Optimization(x_current, (long)bfgs_exploit_iters_agent);
+
+                        if (f_current < bh_best_scores[i]) {
+                            bh_best_scores[i] = f_current;
+                            memcpy(bh_best_params[i].get_data(), x_current.get_data(), num_of_parameters * sizeof(double));
+                        }
+
+                        if (bh_best_scores[i] < optimization_tolerance_loc) {
+                            bh_solution_found = true;
+                            continue;
+                        }
+
+                        double stepsize_now = bh_stepsize_agent;
+                        int accept_count_window = 0;
+                        int window_len = 0;
+
+                        // Basin-hopping loop
+                        for (int hop = 0; hop < bh_hops_agent; hop++) {
+                            if (bh_solution_found) break;
+
+                            // Perturb: uniform random displacement scaled by stepsize
+                            Matrix_real x_trial(1, num_of_parameters);
+                            for (int idx = 0; idx < num_of_parameters; idx++) {
+                                double delta = (local_uniform(local_gen) * 2.0 - 1.0) * stepsize_now * M_PI;
+                                x_trial[idx] = std::fmod(x_current[idx] + delta, 2.0 * M_PI);
+                            }
+
+                            // BFGS polish the perturbed point
+                            BFGS_Powell cBFGS_hop(optimization_problem_combined, this);
+                            double f_trial = cBFGS_hop.Start_Optimization(x_trial, (long)bfgs_exploit_iters_agent);
+
+                            // Metropolis acceptance
+                            bool accept = false;
+                            if (f_trial <= f_current) {
+                                accept = true;
+                            } else {
+                                double dE = f_trial - f_current;
+                                double prob = std::exp(-dE / std::max(1e-300, bh_T_agent));
+                                accept = (local_uniform(local_gen) < prob);
+                            }
+
+                            if (accept) {
+                                memcpy(x_current.get_data(), x_trial.get_data(), num_of_parameters * sizeof(double));
+                                f_current = f_trial;
+                                accept_count_window++;
+                            }
+
+                            // Track best for this candidate
+                            if (f_trial < bh_best_scores[i]) {
+                                bh_best_scores[i] = f_trial;
+                                memcpy(bh_best_params[i].get_data(), x_trial.get_data(), num_of_parameters * sizeof(double));
+                            }
+
+                            if (bh_best_scores[i] < optimization_tolerance_loc) {
+                                bh_solution_found = true;
+                                break;
+                            }
+
+                            // Adaptive stepsize
+                            window_len++;
+                            if (bh_interval_agent > 0 && (window_len % bh_interval_agent) == 0) {
+                                double accept_rate = (double)accept_count_window / (double)bh_interval_agent;
+                                if (accept_rate > bh_target_accept_agent) {
+                                    stepsize_now /= bh_stepwise_factor_agent;
+                                } else {
+                                    stepsize_now *= bh_stepwise_factor_agent;
+                                }
+                                accept_count_window = 0;
+                                window_len = 0;
+                            }
+                        }
+                    }
+                });
+
+            // Collect results
+            for (int64_t i = 0; i < num_bh; i++) {
+                if (bh_best_scores[i] < current_minimum) {
+                    current_minimum = bh_best_scores[i];
+                    memcpy(optimized_parameters_mtx.get_data(), bh_best_params[i].get_data(), num_of_parameters * sizeof(double));
 
                     sstream.str("");
-                    sstream << "AGENTS_BFGS: final sweep improved to " << current_minimum << " from candidate " << fc << std::endl;
+                    sstream << "AGENTS_BFGS: Phase 2 BH improved to " << current_minimum << " from candidate " << i << std::endl;
                     print(sstream, 3);
                 }
 
-                // Early exit if tolerance reached
                 if (current_minimum < optimization_tolerance_loc) {
                     break;
                 }

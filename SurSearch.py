@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional, Sequence, Tuple
+from typing import Any, Optional, Tuple
 
 import numpy as np
 from scipy.optimize import minimize
-from multiprocessing import Pool
 from squander import N_Qubit_Decomposition_custom, Circuit
 
 from math import ceil
@@ -140,6 +139,134 @@ def unique_k_sequences(topology, k):
     return results
 
 
+# ---------------------------------------------------------------------------
+# Random sequence generation & mutation operators (for large-D evolutionary search)
+# ---------------------------------------------------------------------------
+
+def _canonicalize_and_validate(seq, edge_to_mask, thresholds):
+    masks = [edge_to_mask[e] for e in seq]
+    canon = canonical_form(seq, masks)
+    canon_masks = [edge_to_mask[e] for e in canon]
+    for depth in range(len(canon)):
+        if check_new_position(canon_masks, depth, thresholds):
+            return None
+    return canon
+
+
+def generate_valid_sequence(D, edges, edge_masks, thresholds, edge_to_mask):
+    E = len(edges)
+    path = [None] * D
+    path_masks = [0] * D
+
+    for depth in range(D):
+        valid = []
+        for idx in range(E):
+            path[depth] = edges[idx]
+            path_masks[depth] = edge_masks[idx]
+            if not check_new_position(path_masks, depth, thresholds):
+                valid.append(idx)
+        if not valid:
+            return None
+        chosen = valid[np.random.randint(len(valid))]
+        path[depth] = edges[chosen]
+        path_masks[depth] = edge_masks[chosen]
+
+    return _canonicalize_and_validate(tuple(path), edge_to_mask, thresholds)
+
+
+def mutate_point(seq, edges, edge_to_mask, thresholds, max_attempts=50):
+    D = len(seq)
+    E = len(edges)
+    for _ in range(max_attempts):
+        pos = np.random.randint(D)
+        new_seq = list(seq)
+        new_seq[pos] = edges[np.random.randint(E)]
+        result = _canonicalize_and_validate(tuple(new_seq), edge_to_mask, thresholds)
+        if result is not None:
+            return result
+    return None
+
+
+def mutate_swap(seq, edge_to_mask, thresholds, max_attempts=50):
+    D = len(seq)
+    if D < 2:
+        return None
+    for _ in range(max_attempts):
+        i, j = np.random.choice(D, size=2, replace=False)
+        new_seq = list(seq)
+        new_seq[i], new_seq[j] = new_seq[j], new_seq[i]
+        result = _canonicalize_and_validate(tuple(new_seq), edge_to_mask, thresholds)
+        if result is not None:
+            return result
+    return None
+
+
+def mutate_block(seq, edges, edge_to_map, thresholds, block_size=3, max_attempts=50):
+    D = len(seq)
+    E = len(edges)
+    bs = min(block_size, D)
+    for _ in range(max_attempts):
+        start = np.random.randint(D - bs + 1)
+        new_seq = list(seq)
+        for pos in range(start, start + bs):
+            new_seq[pos] = edges[np.random.randint(E)]
+        result = _canonicalize_and_validate(tuple(new_seq), edge_to_map, thresholds)
+        if result is not None:
+            return result
+    return None
+
+
+def crossover_uniform(seq1, seq2, edge_to_mask, thresholds, max_attempts=50):
+    D = len(seq1)
+    for _ in range(max_attempts):
+        new_seq = tuple(seq1[i] if np.random.random() < 0.5 else seq2[i]
+                        for i in range(D))
+        result = _canonicalize_and_validate(new_seq, edge_to_mask, thresholds)
+        if result is not None:
+            return result
+    return None
+
+
+def _generate_candidates(population, scores, n_candidates, edges, edge_masks,
+                         thresholds, edge_to_mask, seen, tournament_size=3,
+                         block_size=3):
+    candidates = []
+    n_pop = len(population)
+    D = len(population[0])
+
+    def tournament_select():
+        indices = np.random.choice(n_pop, size=min(tournament_size, n_pop), replace=False)
+        best_idx = indices[np.argmin(scores[indices])]
+        return population[best_idx]
+
+    max_total_attempts = n_candidates * 10
+    attempts = 0
+
+    while len(candidates) < n_candidates and attempts < max_total_attempts:
+        attempts += 1
+        r = np.random.random()
+
+        if r < 0.40:
+            result = mutate_point(tournament_select(), edges, edge_to_mask, thresholds)
+        elif r < 0.60:
+            result = mutate_swap(tournament_select(), edge_to_mask, thresholds)
+        elif r < 0.75:
+            result = mutate_block(tournament_select(), edges, edge_to_mask,
+                                  thresholds, block_size=block_size)
+        elif r < 0.85:
+            result = crossover_uniform(tournament_select(), tournament_select(),
+                                       edge_to_mask, thresholds)
+        else:
+            result = generate_valid_sequence(D, edges, edge_masks, thresholds,
+                                             edge_to_mask)
+
+        if result is not None and result not in seen:
+            seen.add(result)
+            candidates.append(result)
+
+    return candidates
+
+
 Array = np.ndarray
 def create_circuit_from_edges(x,N):
     circ = Circuit(N)
@@ -150,24 +277,6 @@ def create_circuit_from_edges(x,N):
     for qbit_idx in range(N):
         circ.add_U3(qbit_idx)
     return circ
-
-def pairwise_kernel_matrix(
-    F1: Array,
-    F2: Array,
-    params: Array,
-) -> Array:
-    """RBF kernel matrix from precomputed feature matrices.
-
-    Args:
-        F1: (n1, d) feature matrix
-        F2: (n2, d) feature matrix
-        params: [log_scale, log_lengthscale]
-    """
-    from scipy.spatial.distance import cdist
-    scale = float(np.exp(params[0]))
-    lengthscale = float(np.exp(params[1]))
-    sq_dists = cdist(F1, F2, 'sqeuclidean')
-    return scale * np.exp(-sq_dists / (2 * lengthscale ** 2))
 
 
 @dataclass
@@ -184,9 +293,7 @@ class GPRegressor:
     alpha: Optional[Array] = None
 
     def _kernel(self, F1: Array, F2: Array) -> Array:
-        if self.kernel_fn is not None:
-            return self.kernel_fn(F1, F2, self.kernel_params)
-        return pairwise_kernel_matrix(F1, F2, self.kernel_params)
+        return self.kernel_fn(F1, F2, self.kernel_params)
 
     def fit(self, F: Array, y: Array) -> "GPRegressor":
         """Fit GP on precomputed feature matrix F (n, d) and targets y."""
@@ -233,7 +340,7 @@ class GPRegressor:
         if not return_std:
             return mean, None
 
-        # RBF self-kernel is always scale
+        # Self-kernel is always scale (SSK normalized diagonal = 1)
         scale = float(np.exp(self.kernel_params[0]))
         kss_diag = np.full(F_star.shape[0], scale)
 
@@ -326,140 +433,6 @@ class GPRegressor:
         return np.linalg.solve(L.T, tmp)
 
 
-
-def circuit_features(x, edges, n_qubits):
-    """Hand-crafted sequence-level features for a circuit.
-
-    Returns: edge frequency (E), bigram counts (E²), qubit activity (N),
-    consecutive overlap (1), unique edges fraction (1).
-    """
-    E = len(edges)
-    D = len(x)
-    edge_to_idx = {e: i for i, e in enumerate(edges)}
-
-    edge_freq = np.zeros(E)
-    for e in x:
-        edge_freq[edge_to_idx[e]] += 1
-    edge_freq /= D
-
-    bigram = np.zeros(E * E)
-    if D > 1:
-        for k in range(D - 1):
-            i = edge_to_idx[x[k]]
-            j = edge_to_idx[x[k + 1]]
-            bigram[i * E + j] += 1
-        bigram /= (D - 1)
-
-    qubit_act = np.zeros(n_qubits)
-    for e in x:
-        qubit_act[e[0]] += 1
-        qubit_act[e[1]] += 1
-    qubit_act /= (2 * D)
-
-    consec = 0.0
-    if D > 1:
-        for k in range(D - 1):
-            if set(x[k]) & set(x[k + 1]):
-                consec += 1
-        consec /= (D - 1)
-
-    unique_frac = len(set(x)) / E if E > 0 else 0.0
-    return np.concatenate([edge_freq, bigram, qubit_act, [consec, unique_frac]])
-
-
-def circuit_to_dag(x, n_qubits):
-    """Build predecessor/successor adjacency lists for a gate interaction DAG.
-
-    Each gate is a node; directed edges connect immediate qubit-sharing predecessors
-    to successors (gate j -> gate i if they share a qubit and j is the most recent
-    such predecessor).
-
-    Returns (predecessors, successors) — lists of lists of node indices.
-    """
-    n = len(x)
-    predecessors = [[] for _ in range(n)]
-    successors = [[] for _ in range(n)]
-    last_on_qubit = [None] * n_qubits
-
-    for i in range(n):
-        pred_set = set()
-        for q in x[i]:
-            if last_on_qubit[q] is not None:
-                pred_set.add(last_on_qubit[q])
-        for j in pred_set:
-            predecessors[i].append(j)
-            successors[j].append(i)
-        for q in x[i]:
-            last_on_qubit[q] = i
-
-    return predecessors, successors
-
-
-def wl_feature_matrix(circuits, n_qubits, h_iters=3):
-    """Compute Weisfeiler-Leman feature vectors for all circuits.
-
-    Uses directed WL: node labels are refined by separately aggregating
-    predecessor and successor label multisets. Returns a (n_circuits, vocab_size)
-    dense numpy array where each row is a histogram over WL labels across all
-    iterations.
-    """
-    n_circuits = len(circuits)
-
-    # Build DAGs for all circuits
-    dags = [circuit_to_dag(c, n_qubits) for c in circuits]
-
-    # Iteration 0: initial labels from gate edge tuples
-    # labels[c][i] = label string for node i in circuit c
-    labels = []
-    for c in circuits:
-        labels.append([str(c[i]) for i in range(len(c))])
-
-    label_vocab = {}
-    # Accumulate histograms: list of dicts mapping label_id -> count
-    histograms = [{} for _ in range(n_circuits)]
-
-    def get_label_id(label_str):
-        if label_str not in label_vocab:
-            label_vocab[label_str] = len(label_vocab)
-        return label_vocab[label_str]
-
-    # Record iteration 0 labels
-    for ci in range(n_circuits):
-        for i in range(len(circuits[ci])):
-            lid = get_label_id(labels[ci][i])
-            histograms[ci][lid] = histograms[ci].get(lid, 0) + 1
-
-    # WL iterations
-    for _ in range(h_iters):
-        new_labels = []
-        for ci in range(n_circuits):
-            preds, succs = dags[ci]
-            n = len(circuits[ci])
-            new_lab = [None] * n
-            for i in range(n):
-                pred_labels = sorted(labels[ci][j] for j in preds[i])
-                succ_labels = sorted(labels[ci][j] for j in succs[i])
-                new_lab[i] = labels[ci][i] + "<" + ",".join(pred_labels) + ">" + ",".join(succ_labels)
-            new_labels.append(new_lab)
-
-        labels = new_labels
-
-        # Record this iteration's labels
-        for ci in range(n_circuits):
-            for i in range(len(circuits[ci])):
-                lid = get_label_id(labels[ci][i])
-                histograms[ci][lid] = histograms[ci].get(lid, 0) + 1
-
-    # Build dense feature matrix
-    vocab_size = len(label_vocab)
-    feat = np.zeros((n_circuits, vocab_size), dtype=float)
-    for ci in range(n_circuits):
-        for lid, count in histograms[ci].items():
-            feat[ci, lid] = count
-
-    return feat
-
-
 def ssk_kernel_value(s1, s2, D, match_sq):
     """Compute SSK kernel between two equal-length sequences.
 
@@ -521,9 +494,53 @@ def ssk_gram_matrix(circuits, gap_decay, match_decay, order):
     K_norm = K / (diag[:, None] * diag[None, :])
     return K_norm
 
-def generate_goal_unitary(N, edges):
-    goal = create_circuit_from_edges(edges,N)
-    return goal.get_Matrix(np.random.rand(goal.get_Parameter_Num())*2*np.pi)
+
+class SSKCache:
+    """Incremental SSK kernel cache for evolutionary search.
+
+    Computes and caches pairwise SSK kernel values on demand, avoiding
+    the need to precompute the full Gram matrix over all circuits.
+    """
+
+    def __init__(self, gap_decay, match_decay, order, seq_len):
+        self.match_sq = match_decay * match_decay
+        self.circuits = []
+        self.circuit_to_idx = {}
+        self._raw_cache = {}
+        idx = np.arange(seq_len)
+        self.D_matrix = np.where(
+            idx[None, :] > idx[:, None],
+            gap_decay ** (idx[None, :] - idx[:, None] - 1), 0.0)
+
+    def register(self, circuit):
+        key = tuple(circuit)
+        if key in self.circuit_to_idx:
+            return self.circuit_to_idx[key]
+        idx = len(self.circuits)
+        self.circuits.append(key)
+        self.circuit_to_idx[key] = idx
+        return idx
+
+    def get_raw(self, i, j):
+        key = (min(i, j), max(i, j))
+        if key not in self._raw_cache:
+            self._raw_cache[key] = ssk_kernel_value(
+                self.circuits[key[0]], self.circuits[key[1]],
+                self.D_matrix, self.match_sq)
+        return self._raw_cache[key]
+
+    def kernel_matrix(self, idx1, idx2, scale):
+        n1, n2 = len(idx1), len(idx2)
+        K = np.empty((n1, n2))
+        diag1 = np.array([self.get_raw(i, i) for i in idx1])
+        diag2 = np.array([self.get_raw(j, j) for j in idx2])
+        for a, i in enumerate(idx1):
+            for b, j in enumerate(idx2):
+                K[a, b] = self.get_raw(i, j)
+        d1 = np.sqrt(np.maximum(diag1, 1e-24))
+        d2 = np.sqrt(np.maximum(diag2, 1e-24))
+        return scale * K / (d1[:, None] * d2[None, :])
+
 
 class qgd_SurSearch:
     def __init__(self,Umtx,config, D,topology=None):
@@ -538,9 +555,17 @@ class qgd_SurSearch:
                 for jdx in range(idx+1,self.N):
                     topology.append((idx,jdx))
         self.topology = topology
+        self.best_score = float('inf')
+        self.best_params = None
+        self.best_circ = None
 
-    def search_over_D(self, log_file="sursearch_diagnostics.txt", pool=None):
-        from scipy.spatial.distance import pdist
+    def search_over_D(self, log_file="sursearch_diagnostics.txt"):
+
+        # Auto-dispatch to evolutionary search when space is too large
+        edges_est = sorted(set(tuple(e) for e in self.topology))
+        enum_threshold = self.config.get('enum_threshold', 10000)
+        if len(edges_est) ** self.D > enum_threshold:
+            return self.search_over_D_evolve(log_file=log_file)
 
         circuits = unique_k_sequences(self.topology, self.D)
         edges = sorted(set(tuple(e) for e in self.topology))
@@ -549,7 +574,7 @@ class qgd_SurSearch:
         max_iters = self.config.get('max_sur_iters', 1000)
         X0_size = self.config.get('X0_size', 5)
 
-        # Compute features for EI/LCB only
+        # Compute SSK kernel for LCB surrogate
         feature_cache = None
         gp_kernel_params = None
         gp_noise = None
@@ -557,48 +582,25 @@ class qgd_SurSearch:
         feat_dim = None
         gp_kernel_fn = None
 
-        if acquisition in ('EI', 'LCB'):
-            kernel_type = self.config.get('kernel', 'handcrafted')
+        if acquisition == 'LCB':
+            gap_decay = self.config.get('ssk_gap_decay', 0.8)
+            match_decay = self.config.get('ssk_match_decay', 0.8)
+            ssk_order = self.config.get('ssk_order', 3)
+            K_ssk = ssk_gram_matrix(circuits, gap_decay, match_decay, ssk_order)
+            feature_cache = {tuple(c): np.array([float(i)]) for i, c in enumerate(circuits)}
+            feat_dim = K_ssk.shape[1]
+            gp_kernel_params = np.array([0.0])  # log_scale only
+            gp_noise = 1e-2
+            gp_bounds = [(-3.0, 3.0)]
+            gp_noise_bounds = (-8.0, -1.0)  # max noise=0.37 forces kernel to explain data
 
-            if kernel_type == 'ssk':
-                gap_decay = self.config.get('ssk_gap_decay', 0.8)
-                match_decay = self.config.get('ssk_match_decay', 0.8)
-                ssk_order = self.config.get('ssk_order', 3)
-                K_ssk = ssk_gram_matrix(circuits, gap_decay, match_decay, ssk_order)
-                feature_cache = {tuple(c): np.array([float(i)]) for i, c in enumerate(circuits)}
-                feat_dim = K_ssk.shape[1]
-                gp_kernel_params = np.array([0.0])  # log_scale only
-                gp_noise = 1e-2
-                gp_bounds = [(-3.0, 3.0)]
-                gp_noise_bounds = (-8.0, -1.0)  # max noise=0.37 forces kernel to explain data
+            def _ssk_kernel_fn(F1, F2, params):
+                scale = float(np.exp(params[0]))
+                idx1 = F1[:, 0].astype(int)
+                idx2 = F2[:, 0].astype(int)
+                return scale * K_ssk[np.ix_(idx1, idx2)]
 
-                def _ssk_kernel_fn(F1, F2, params):
-                    scale = float(np.exp(params[0]))
-                    idx1 = F1[:, 0].astype(int)
-                    idx2 = F2[:, 0].astype(int)
-                    return scale * K_ssk[np.ix_(idx1, idx2)]
-
-                gp_kernel_fn = _ssk_kernel_fn
-            else:
-                if kernel_type == 'wl':
-                    h_iters = self.config.get('wl_iters', 3)
-                    all_feats_raw = wl_feature_matrix(circuits, self.N, h_iters=h_iters)
-                    raw = {tuple(circuits[i]): all_feats_raw[i] for i in range(len(circuits))}
-                else:
-                    raw = {tuple(c): circuit_features(c, edges, self.N) for c in circuits}
-                all_feats = np.array(list(raw.values()))
-                feat_mean = all_feats.mean(axis=0)
-                feat_std = all_feats.std(axis=0)
-                feat_std[feat_std < 1e-12] = 1.0
-                feature_cache = {k: (v - feat_mean) / feat_std for k, v in raw.items()}
-                all_standardized = np.array(list(feature_cache.values()))
-                median_dist = float(np.median(pdist(all_standardized, 'euclidean')))
-                log_median = np.log(max(median_dist, 1e-6))
-                feat_dim = all_feats.shape[1]
-                gp_kernel_params = np.array([0.0, log_median])
-                gp_noise = 1e-2
-                gp_bounds = [(-3.0, 3.0), (log_median - 3.0, log_median + 3.0)]
-                gp_noise_bounds = (-8.0, 0.0)
+            gp_kernel_fn = _ssk_kernel_fn
 
             def _feature_matrix(circs):
                 return np.array([feature_cache[tuple(c)] for c in circs])
@@ -607,9 +609,13 @@ class qgd_SurSearch:
         np.random.shuffle(circuits)
         X = list(circuits[:X0_size])
         remaining_circs = list(circuits[X0_size:])
-        y = np.array([self.decompose(x, pool=pool) for x in X])
-        best_score = float(np.min(y))
-        best_circ = X[int(np.argmin(y))]
+        _init_results = [self.decompose(x) for x in X]
+        y = np.array([r[0] for r in _init_results])
+        _init_params = [r[1] for r in _init_results]
+        best_idx = int(np.argmin(y))
+        best_score = float(y[best_idx])
+        best_circ = X[best_idx]
+        best_params = _init_params[best_idx]
 
         with open(log_file, 'w') as f:
             f.write(f"SurSearch diagnostics: N={self.N}, D={self.D}, "
@@ -624,6 +630,9 @@ class qgd_SurSearch:
             print("Success at random selection")
             with open(log_file, 'a') as f:
                 f.write("Success at random selection\n")
+            self.best_score = best_score
+            self.best_params = best_params
+            self.best_circ = best_circ
             return best_circ
 
         for itr in range(max_iters):
@@ -633,7 +642,6 @@ class qgd_SurSearch:
             if acquisition == 'random':
                 selected_idx = int(np.random.randint(len(remaining_circs)))
                 acq_disp = float('nan')
-                gp_scale_disp = gp_ls_disp = gp_noise_disp = float('nan')
             else:
                 F_train = _feature_matrix(X)
                 F_remaining = _feature_matrix(remaining_circs)
@@ -662,41 +670,35 @@ class qgd_SurSearch:
                 opt_scale = float(np.exp(gp.kernel_params[0]))
                 opt_noise = float(gp.noise)
                 if opt_scale / max(opt_noise, 1e-12) < 0.1:
-                    gp_kernel_params = np.array([0.0]) if kernel_type == 'ssk' else np.array([0.0, gp_kernel_params[1]])
+                    gp_kernel_params = np.array([0.0])
                     gp_noise = 1e-2
                 else:
                     gp_kernel_params = gp.kernel_params.copy()
                     gp_noise = gp.noise
                 gp_scale_disp = float(np.exp(gp_kernel_params[0]))
-                gp_ls_disp = float(np.exp(gp_kernel_params[1])) if len(gp_kernel_params) > 1 else float('nan')
                 gp_noise_disp = gp_noise
 
                 log_mu_norm, log_std_norm = gp.predict(F_remaining, return_std=True,
                                                        include_noise=False)
 
-                if acquisition == 'EI':
-                    best_score_pos = max(best_score, dynamic_floor)
-                    log_y_best_norm = (np.log10(best_score_pos) - lmu) / lsig
-                    acq_vals = self.ei(log_mu_norm, log_std_norm, log_y_best_norm)
-                else:  # LCB
-                    acq_vals = self.lcb(log_mu_norm, log_std_norm)
+                acq_vals = self.lcb(log_mu_norm, log_std_norm)
 
                 selected_idx = int(np.argmin(acq_vals))
                 acq_disp = float(acq_vals[selected_idx])
 
-            new_score = self.decompose(remaining_circs[selected_idx], pool=pool)
+            new_score, new_params = self.decompose(remaining_circs[selected_idx])
 
             if new_score < best_score:
                 best_score = new_score
                 best_circ = remaining_circs[selected_idx]
+                best_params = new_params
 
             lines = [
                 f"Iteration {itr}:",
                 f"  acquisition={acquisition}, acq_val={acq_disp:.6f}",
             ]
-            if acquisition in ('EI', 'LCB'):
-                lines.append(f"  GP: scale={gp_scale_disp:.4f}, "
-                             f"ls={gp_ls_disp:.4f}, noise={gp_noise_disp:.6f}")
+            if acquisition == 'LCB':
+                lines.append(f"  GP: scale={gp_scale_disp:.4f}, noise={gp_noise_disp:.6f}")
             lines += [
                 f"  Actual score: {new_score:.6f}",
                 f"  Best score so far: {best_score:.6f} "
@@ -714,18 +716,240 @@ class qgd_SurSearch:
                 print(msg)
                 with open(log_file, 'a') as f:
                     f.write(msg + "\n")
+                self.best_score = new_score
+                self.best_params = new_params
+                self.best_circ = remaining_circs[selected_idx]
                 return remaining_circs[selected_idx]
             y = np.append(y, new_score)
             X.append(remaining_circs[selected_idx])
             remaining_circs.pop(selected_idx)
+        self.best_score = best_score
+        self.best_params = best_params
+        self.best_circ = best_circ
         print("Solution not found")
         return best_circ
 
+    def search_over_D_evolve(self, log_file="sursearch_diagnostics.txt"):
+        """Surrogate-assisted evolutionary search for large-D spaces.
 
-    def decompose(self, x, pool=None):
-        ansatz = create_circuit_from_edges(x, self.N)
+        Uses evolutionary operators (mutation, crossover, random generation)
+        to propose candidate circuits, then screens them with a GP surrogate
+        using the SSK kernel. Follows the BOSS approach (Moss et al., 2020).
+        """
+        edges = sorted(set(tuple(e) for e in self.topology))
+        vertices = {v for edge in edges for v in edge}
+        edge_masks = precompute_edge_masks(edges, vertices)
+        thresholds = precompute_thresholds(len(vertices))
+        edge_to_mask = {e: m for e, m in zip(edges, edge_masks)}
+
+        tolerance = self.config.get('tolerance', 1e-8)
+        max_iters = self.config.get('max_sur_iters', 1000)
+        X0_size = self.config.get('X0_size', 10)
+        candidates_per_iter = self.config.get('candidates_per_iter', 100)
+        tournament_size = self.config.get('tournament_size', 3)
+        gp_reopt_interval = self.config.get('gp_reopt_interval', 10)
+        block_size = self.config.get('block_mutation_size', 3)
+
+        gap_decay = self.config.get('ssk_gap_decay', 0.8)
+        match_decay = self.config.get('ssk_match_decay', 0.8)
+        ssk_order = self.config.get('ssk_order', 3)
+
+        ssk_cache = SSKCache(gap_decay, match_decay, ssk_order, self.D)
+        seen = set()
+
+        # Initial random sample
+        X = []
+        while len(X) < X0_size:
+            seq = generate_valid_sequence(self.D, edges, edge_masks, thresholds,
+                                          edge_to_mask)
+            if seq is not None and seq not in seen:
+                seen.add(seq)
+                ssk_cache.register(seq)
+                X.append(seq)
+
+        _init_results = [self.decompose(x) for x in X]
+        y = np.array([r[0] for r in _init_results])
+        _init_params = [r[1] for r in _init_results]
+        best_idx = int(np.argmin(y))
+        best_score = float(y[best_idx])
+        best_circ = X[best_idx]
+        best_params = _init_params[best_idx]
+
+        with open(log_file, 'w') as f:
+            f.write(f"SurSearch (evolutionary) diagnostics: N={self.N}, D={self.D}, "
+                    f"kappa={self.kappa}, "
+                    f"topology={self.topology}\n")
+            f.write(f"Mode: evolutionary, initial sample: {X0_size}, "
+                    f"candidates_per_iter: {candidates_per_iter}\n")
+            f.write(f"Initial y stats: min={np.min(y):.6f}, "
+                    f"mean={np.mean(y):.4f}, std={np.std(y):.4f}\n")
+            f.write("-" * 70 + "\n")
+
+        if best_score < tolerance:
+            print("Success at random selection")
+            with open(log_file, 'a') as f:
+                f.write("Success at random selection\n")
+            self.best_score = best_score
+            self.best_params = best_params
+            self.best_circ = best_circ
+            return best_circ
+
+        # GP setup (SSK kernel — single hyperparameter: log_scale)
+        gp_kernel_params = np.array([0.0])
+        gp_noise = 1e-2
+        gp_bounds = [(-3.0, 3.0)]
+        gp_noise_bounds = (-8.0, -1.0)
+
+        def _ssk_kernel_fn(F1, F2, params):
+            scale = float(np.exp(params[0]))
+            idx1 = F1[:, 0].astype(int)
+            idx2 = F2[:, 0].astype(int)
+            return ssk_cache.kernel_matrix(idx1, idx2, scale)
+
+        for itr in range(max_iters):
+            # Generate candidates via evolutionary operators
+            candidates = _generate_candidates(
+                X, y, candidates_per_iter, edges, edge_masks, thresholds,
+                edge_to_mask, seen, tournament_size=tournament_size,
+                block_size=block_size)
+
+            if not candidates:
+                print("Cannot generate new candidates")
+                break
+
+            # Register candidates in SSK cache
+            for c in candidates:
+                ssk_cache.register(c)
+
+            # Build feature matrices (indices into SSK cache)
+            F_train = np.array([[float(ssk_cache.circuit_to_idx[tuple(x)])]
+                                for x in X])
+            F_cand = np.array([[float(ssk_cache.circuit_to_idx[tuple(c)])]
+                               for c in candidates])
+
+            # Dynamic floor + log transform (same as search_over_D)
+            nonzero_y = y[y > 0]
+            dynamic_floor = (float(nonzero_y.min()) * 0.01
+                             if len(nonzero_y) > 0 else tolerance * 0.01)
+            y_clamped = np.maximum(y, dynamic_floor)
+            log_y = np.log10(y_clamped)
+            lmu = float(log_y.mean())
+            lsig = float(max(log_y.std(), 1e-6))
+            log_y_norm = (log_y - lmu) / lsig
+
+            # Fit GP
+            gp = GPRegressor(
+                kernel_params=gp_kernel_params.copy(),
+                noise=gp_noise,
+                kernel_fn=_ssk_kernel_fn,
+            ).fit(F_train, log_y_norm)
+
+            # Optimize hyperparameters periodically
+            if itr % gp_reopt_interval == 0:
+                n_restarts = max(2, 8 - len(X) // 5)
+                try:
+                    gp.optimize_hyperparameters(n_restarts=n_restarts,
+                                                kernel_bounds=gp_bounds,
+                                                noise_bounds=gp_noise_bounds)
+                except Exception:
+                    pass
+
+            # Collapse detection
+            opt_scale = float(np.exp(gp.kernel_params[0]))
+            opt_noise = float(gp.noise)
+            if opt_scale / max(opt_noise, 1e-12) < 0.1:
+                gp_kernel_params = np.array([0.0])
+                gp_noise = 1e-2
+            else:
+                gp_kernel_params = gp.kernel_params.copy()
+                gp_noise = gp.noise
+            gp_scale_disp = float(np.exp(gp_kernel_params[0]))
+            gp_noise_disp = gp_noise
+
+            # Acquisition function
+            log_mu_norm, log_std_norm = gp.predict(F_cand, return_std=True,
+                                                    include_noise=False)
+
+            acq_vals = self.lcb(log_mu_norm, log_std_norm)
+
+            selected_idx = int(np.argmin(acq_vals))
+            acq_disp = float(acq_vals[selected_idx])
+
+            # Evaluate best candidate
+            new_score, new_params = self.decompose(candidates[selected_idx])
+
+            if new_score < best_score:
+                best_score = new_score
+                best_circ = candidates[selected_idx]
+                best_params = new_params
+
+            lines = [
+                f"Iteration {itr}:",
+                f"  acq_val={acq_disp:.6f}",
+                f"  GP: scale={gp_scale_disp:.4f}, noise={gp_noise_disp:.6f}",
+                f"  Actual score: {new_score:.6f}",
+                f"  Best score so far: {best_score:.6f} "
+                f"({len(X)+1} evaluated, {len(candidates)} candidates generated)",
+                f"  y stats: min={np.min(y):.4f}, mean={np.mean(y):.4f}, "
+                f"std={np.std(y):.4f}",
+            ]
+            for line in lines:
+                print(line)
+            with open(log_file, 'a') as f:
+                f.write("\n".join(lines) + "\n")
+
+            if new_score < tolerance:
+                msg = f"Success at iteration: {itr}"
+                print(msg)
+                with open(log_file, 'a') as f:
+                    f.write(msg + "\n")
+                self.best_score = new_score
+                self.best_params = new_params
+                self.best_circ = candidates[selected_idx]
+                return candidates[selected_idx]
+
+            y = np.append(y, new_score)
+            X.append(candidates[selected_idx])
+
+        self.best_score = best_score
+        self.best_params = best_params
+        self.best_circ = best_circ
+        print("Solution not found")
+        return best_circ
+
+    def Start_Decomposition(self, D_start, D_end, log_file_prefix="sursearch"):
+        edges = sorted(set(tuple(e) for e in self.topology))
+        enum_threshold = self.config.get('enum_threshold', 10000)
+        tolerance = self.config.get('tolerance', 1e-8)
+
+        for D in range(D_start, D_end + 1):
+            self.D = D
+
+            # Estimate circuit count for iteration budget
+            if len(edges) ** D <= enum_threshold:
+                n_circuits = len(unique_k_sequences(self.topology, D))
+            else:
+                n_circuits = len(edges) ** D
+
+            max_iters = min(n_circuits // 3, 2000)
+            self.config['max_sur_iters'] = max(max_iters, 1)
+
+            log_file = f"{log_file_prefix}_D{D}.txt"
+            print(f"--- D={D}: ~{n_circuits} circuits, max_iters={self.config['max_sur_iters']} ---")
+            self.search_over_D(log_file=log_file)
+
+            if self.best_score < tolerance:
+                print(f"Solution found at D={D}")
+                return self.best_circ
+
+        print(f"Solution not found up to D={D_end}")
+        return self.best_circ
+
+    def decompose(self, x):
         optimizer = self.config.get('optimizer', 'BFGS')
+
         if optimizer == 'POSMM':
+            ansatz = create_circuit_from_edges(x, self.N)
             config = dict(self.config)
             config.setdefault('radius_base', config.get('rconstant', 0.5))
             cDecomp = N_Qubit_Decomposition_custom(self.Umtx.conj().T, config=config)
@@ -736,7 +960,9 @@ class qgd_SurSearch:
             cDecomp.set_Optimizer("POSMM")
             cDecomp.Start_Decomposition()
             params = cDecomp.get_Optimized_Parameters()
-            return cDecomp.Optimization_Problem(params)
+            return cDecomp.Optimization_Problem(params), params
+
+        ansatz = create_circuit_from_edges(x, self.N)
         cDecomp = N_Qubit_Decomposition_custom(self.Umtx.conj().T, config=self.config)
         cDecomp.set_Verbose(0)
         cDecomp.set_Cost_Function_Variant(3)
@@ -745,25 +971,7 @@ class qgd_SurSearch:
         cDecomp.set_Optimizer(optimizer)
         cDecomp.Start_Decomposition()
         params = cDecomp.get_Optimized_Parameters()
-        return cDecomp.Optimization_Problem(params)
+        return cDecomp.Optimization_Problem(params), params
 
     def lcb(self, mu, std):
         return mu - self.kappa * std
-
-    def ei(self, log_mu_norm, log_std_norm, log_y_best_norm):
-        """Negative Expected Improvement in z-scored log10 space (use argmin to select)."""
-        from scipy.stats import norm as scipy_norm
-        z = (log_y_best_norm - log_mu_norm) / (log_std_norm + 1e-9)
-        ei_val = ((log_y_best_norm - log_mu_norm) * scipy_norm.cdf(z)
-                  + log_std_norm * scipy_norm.pdf(z))
-        return -np.maximum(ei_val, 0.0)
-
-
-if __name__ == "__main__":
-    N=3
-    goal_edges = [(0,1),(1,2),(0,1),(0,2),(0,2),(1,2),(0,1)]
-    Umtx = generate_goal_unitary(N, edges=goal_edges)
-    config = {'use_basin_hopping': 1, 'bh_T': 1.1375279022671254, 'bh_stepsize': 0.9200273804590016, 'bh_interval': 94, 'bh_target_accept_rate': 0.5661497388955112,
-              'bh_stepwise_factor': 0.5557762288919466,'optimizer':'BFGS2','parallel':2,'X0_size':50,'max_sur_iters':500, 'kappa':0.5}
-    sursearch = qgd_SurSearch(Umtx,config,len(goal_edges))
-    sursearch.search_over_D()
