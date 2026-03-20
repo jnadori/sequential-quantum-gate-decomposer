@@ -1090,7 +1090,7 @@ class qgd_Wide_Circuit_Optimization:
         L = topo_sort_partitions(circ, max_partition_size, parts)
         return [parts[i] for i in L], [struct_idxs[i] for i in L]
 
-    def OptimizeWideCircuit( self, circ: Circuit, parameters: np.ndarray, global_min=True ) -> Tuple[Circuit, np.ndarray]:
+    def OptimizeWideCircuit( self, circ: Circuit, parameters: np.ndarray, global_min=True, part_size_end=None ) -> Tuple[Circuit, np.ndarray]:
         part_size_start = self.max_partition_size
         if part_size_end is None:
             part_size_end = self.max_partition_size
@@ -1231,11 +1231,11 @@ class qgd_Wide_Circuit_Optimization:
                         new_subcircuit, new_parameters = callback_fnc(async_results[partition_idx].get( timeout = None ))
 
                     if subcircuit != new_subcircuit and self.config["verbosity"] > 0:
-                            print( "original subcircuit:    ", subcircuit.get_Gate_Nums(), partition_idx) 
-                            print( "reoptimized subcircuit: ", new_subcircuit.get_Gate_Nums()) 
-                        if fingerprint_dict is not None:
-                            fingerprint_dict[fingerprint] = (new_subcircuit, new_parameters)
-                            fingerprint_dict[get_fingerprint(new_subcircuit, new_parameters)] = (new_subcircuit, new_parameters)
+                        print( "original subcircuit:    ", subcircuit.get_Gate_Nums(), partition_idx)
+                        print( "reoptimized subcircuit: ", new_subcircuit.get_Gate_Nums())
+                    if fingerprint_dict is not None:
+                        fingerprint_dict[fingerprint] = (new_subcircuit, new_parameters)
+                        fingerprint_dict[get_fingerprint(new_subcircuit, new_parameters)] = (new_subcircuit, new_parameters)
                     if partition_idx % 100 == 99 and self.config["verbosity"] > 0: print(partition_idx+1, "partitions optimized")
                     optimized_subcircuits[ partition_idx ] = new_subcircuit
                     optimized_parameter_list[ partition_idx ] = new_parameters
