@@ -89,7 +89,7 @@ class qgd_Partition_Aware_Mapping:
         self.config.setdefault('bh_stepwise_factor', 0.9)
         self.config.setdefault('hs_score_workers', os.cpu_count() or 1)
         self.config.setdefault('use_osr', 1)
-        self.config.setdeafault('use_graphsearch',1)
+        self.config.setdefault('use_graphsearch',1)
         self.config.setdefault('n_layout_trials', 1)
         self.config.setdefault('score_tolerance', 0.05)
         self.config.setdefault('random_seed', 42)
@@ -436,7 +436,7 @@ class qgd_Partition_Aware_Mapping:
         # permutations produce the same unitary matrix.
         decomp_cache = {}
 
-        with Pool(processes=n_cpus, initializer=_init_decompose_worker,
+        with Pool(processes=n_cpus//2, initializer=_init_decompose_worker,
                   initargs=(self.config,)) as pool:
             # Initialize PartitionSynthesisResult for each multi-qubit partition
             results_map = {}
@@ -653,7 +653,7 @@ class qgd_Partition_Aware_Mapping:
                     )
                     pre_cleanup_cnots = trial_circuit.get_Gate_Nums().get('CNOT', 0)
                     trial_circuit, trial_params = wco.OptimizeWideCircuit(
-                        trial_circuit.get_Flat_Circuit(), trial_params,
+                        trial_circuit.get_Flat_Circuit(), trial_params, 3
                     )
 
                     cost = trial_circuit.get_Gate_Nums().get('CNOT', 0)
@@ -727,7 +727,7 @@ class qgd_Partition_Aware_Mapping:
                 cleanup_config['test_final_circuit'] = False
                 wco = qgd_Wide_Circuit_Optimization(cleanup_config)
                 final_circuit, final_parameters = wco.OptimizeWideCircuit(
-                    final_circuit.get_Flat_Circuit(), final_parameters
+                    final_circuit.get_Flat_Circuit(), final_parameters, 3
                 )
 
         return final_circuit, final_parameters, pi_initial, pi

@@ -1197,7 +1197,7 @@ class qgd_Wide_Circuit_Optimization:
         else:
             # list of AsyncResult objects (for 2-qubit) or direct results (for 1-qubit and 3+ qubit)
             async_results = [None] * len(subcircuits)
-            n_cpus = mp.cpu_count()
+            n_cpus = mp.cpu_count()//2
             with Pool(processes=n_cpus) as pool:
 
                 #  code for iterate over partitions and optimize them
