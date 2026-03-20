@@ -49,6 +49,7 @@ limitations under the License.
 #include "T.h"
 #include "Tdg.h"
 #include "SX.h"
+#include "SXdg.h"
 #include "SYC.h"
 #include "UN.h"
 #include "ON.h"
@@ -387,6 +388,7 @@ Gates_block::apply_from_right( Matrix_real& parameters_mtx, Matrix& input ) {
         case CH_OPERATION: case SYC_OPERATION:
         case X_OPERATION: case Y_OPERATION:
         case Z_OPERATION: case SX_OPERATION:
+        case SXDG_OPERATION:
         case T_OPERATION: case TDG_OPERATION:
         case S_OPERATION: case SDG_OPERATION:
         case GENERAL_OPERATION: case H_OPERATION:
@@ -1392,7 +1394,32 @@ void Gates_block::add_sx_to_front(int target_qbit ) {
 }
 
 
+/**
+@brief Append a SXdg gate to the list of gates
+@param target_qbit The identification number of the targt qubit. (0 <= target_qbit <= qbit_num-1)
+*/
+void Gates_block::add_sxdg(int target_qbit) {
 
+        // create the operation
+        Gate* operation = static_cast<Gate*>(new SXdg( qbit_num, target_qbit));
+
+        // adding the operation to the end of the list of gates
+        add_gate( operation );
+}
+
+/**
+@brief Add a SXdg gate to the front of the list of gates
+@param target_qbit The identification number of the targt qubit. (0 <= target_qbit <= qbit_num-1)
+*/
+void Gates_block::add_sxdg_to_front(int target_qbit ) {
+
+        // create the operation
+        Gate* gate = static_cast<Gate*>(new SXdg( qbit_num, target_qbit ));
+
+        // adding the operation to the front of the list of gates
+        add_gate_to_front( gate );
+
+}
 
 
 /**
@@ -2248,6 +2275,15 @@ void Gates_block::list_gates( const Matrix_real &parameters, int start_index ) {
 		print(sstream, 1);	    	
                 gate_idx = gate_idx + 1;
             }
+            else if (gate->get_type() == SXDG_OPERATION) {
+                // get the inverse parameters of the U3 rotation
+                SXdg* sxdg_gate = static_cast<SXdg*>(gate);
+
+		std::stringstream sstream;
+		sstream << gate_idx << "th gate: SXdg on target qubit: " << sxdg_gate->get_target_qbit() << std::endl;
+		print(sstream, 1);	    	
+                gate_idx = gate_idx + 1;
+            }
             else if (gate->get_type() == BLOCK_OPERATION) {
                 Gates_block* block_gate = static_cast<Gates_block*>(gate);
                 const Matrix_real parameters_layer(parameters.get_data() + parameter_idx, 1, gate->get_parameter_num() );
@@ -2361,7 +2397,7 @@ Gates_block::create_remapped_circuit( const std::map<int, int>& qbit_map, const 
         case T_OPERATION: case TDG_OPERATION:
         case CZ_NU_OPERATION: case CU_OPERATION:
         case RXX_OPERATION: case RYY_OPERATION:
-        case RZZ_OPERATION:
+        case RZZ_OPERATION: case SXDG_OPERATION:
         case CNZ_OPERATION: case N_QUBIT_PHASE_OPERATION:
         case CROT_OPERATION:
         {
@@ -2581,7 +2617,7 @@ void Gates_block::set_qbit_num( int qbit_num_in ) {
         case S_OPERATION: case SDG_OPERATION:
         case T_OPERATION: case TDG_OPERATION:
         case RXX_OPERATION: case RYY_OPERATION:
-        case RZZ_OPERATION:
+        case RZZ_OPERATION: case SXDG_OPERATION:
         case CNZ_OPERATION: case N_QUBIT_PHASE_OPERATION:
             op->set_qbit_num( qbit_num_in );
             break;
@@ -2650,7 +2686,7 @@ int Gates_block::extract_gates( Gates_block* op_block ) {
         case RYY_OPERATION: case RZZ_OPERATION:
         case CNZ_OPERATION: case N_QUBIT_PHASE_OPERATION:
         case CSWAP_OPERATION: case CCX_OPERATION:
-
+        case SXDG_OPERATION:
         {
             Gate* op_cloned = op->clone();
             op_block->add_gate( op_cloned );
@@ -3449,6 +3485,10 @@ void Gates_block::adjust_parameters_for_derivation( DFEgate_kernel_type* DFEgate
                 std::string error("Gates_block::convert_to_DFE_gates: SX_gate not implemented");
                 throw error;	    	
             }
+            else if (gate->get_type() == SXDG_OPERATION) {
+                std::string error("Gates_block::convert_to_DFE_gates: SXdg_gate not implemented");
+                throw error;	    	
+            }
             else if (gate->get_type() == BLOCK_OPERATION) {
 
                 Gates_block* block_gate = static_cast<Gates_block*>(gate);
@@ -4034,6 +4074,11 @@ Gates_block::extract_gate_kernels_target_and_control_qubits(std::vector<Matrix> 
         case SX_OPERATION: {
             SX* sx_operation = static_cast<SX*>(operation);
             u3_qbit.push_back(sx_operation->calc_one_qubit_u3());
+            break;
+        }
+        case SXDG_OPERATION: {
+            SXdg* sxdg_operation = static_cast<SXdg*>(operation);
+            u3_qbit.push_back(sxdg_operation->calc_one_qubit_u3());
             break;
         }
         case U1_OPERATION: {

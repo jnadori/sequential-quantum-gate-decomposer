@@ -53,6 +53,7 @@ from squander.gates.gates_Wrapper import (
     RXX,
     RYY,
     RZZ,
+    SXdg
     CNZ,
     CNZ_NU
 )
