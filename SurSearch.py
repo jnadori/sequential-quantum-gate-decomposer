@@ -234,18 +234,27 @@ def _generate_candidates(population, scores, n_candidates, edges, edge_masks,
     candidates = []
     n_pop = len(population)
     D = len(population[0])
+    t_size = min(tournament_size, n_pop)
+
+    max_total_attempts = n_candidates * 10
+
+    # Pre-generate random numbers in bulk
+    op_probs = np.random.random(max_total_attempts)
+    tour_indices = np.random.randint(0, n_pop, size=(max_total_attempts * 2, t_size))
+    tour_idx = 0
 
     def tournament_select():
-        indices = np.random.choice(n_pop, size=min(tournament_size, n_pop), replace=False)
+        nonlocal tour_idx
+        indices = tour_indices[tour_idx]
+        tour_idx += 1
         best_idx = indices[np.argmin(scores[indices])]
         return population[best_idx]
 
-    max_total_attempts = n_candidates * 10
     attempts = 0
 
     while len(candidates) < n_candidates and attempts < max_total_attempts:
+        r = op_probs[attempts]
         attempts += 1
-        r = np.random.random()
 
         if r < 0.40:
             result = mutate_point(tournament_select(), edges, edge_to_mask, thresholds)
@@ -548,45 +557,70 @@ class SSKCache:
         self.D_matrix = np.where(
             idx[None, :] > idx[:, None],
             gap_decay ** (idx[None, :] - idx[:, None] - 1), 0.0)
-        self._K_norm = np.empty((0, 0))
-        self._raw_diags = np.empty(0)
-        # For vectorized kernel computation
-        self._circuits_int = np.empty((0, seq_len), dtype=np.int32)
+        self._capacity = 64
+        self._size = 0
+        self._K_norm = np.empty((64, 64))
+        self._raw_diags = np.empty(64)
+        self._circuits_int = np.empty((64, seq_len), dtype=np.int32)
         self._edge_to_id = {}
         self._next_id = 0
+
+    def _encode_circuit(self, circuit):
+        """Encode a circuit (tuple of edges) as an int array using shared edge IDs."""
+        n = self.seq_len
+        new_int = np.empty(n, dtype=np.int32)
+        for j, edge in enumerate(circuit):
+            if edge not in self._edge_to_id:
+                self._edge_to_id[edge] = self._next_id
+                self._next_id += 1
+            new_int[j] = self._edge_to_id[edge]
+        return new_int
+
+    def _grow_capacity(self):
+        """Double the capacity of pre-allocated arrays."""
+        new_cap = self._capacity * 2
+        n = self.seq_len
+        sz = self._size
+
+        new_circuits_int = np.empty((new_cap, n), dtype=np.int32)
+        new_circuits_int[:sz] = self._circuits_int[:sz]
+        self._circuits_int = new_circuits_int
+
+        new_raw_diags = np.empty(new_cap)
+        new_raw_diags[:sz] = self._raw_diags[:sz]
+        self._raw_diags = new_raw_diags
+
+        new_K_norm = np.empty((new_cap, new_cap))
+        new_K_norm[:sz, :sz] = self._K_norm[:sz, :sz]
+        self._K_norm = new_K_norm
+
+        self._capacity = new_cap
 
     def register(self, circuit):
         key = tuple(circuit)
         if key in self.circuit_to_idx:
             return self.circuit_to_idx[key]
-        new_idx = len(self.circuits)
+
+        new_idx = self._size
         self.circuits.append(key)
         self.circuit_to_idx[key] = new_idx
 
-        # Encode new circuit as int array
-        n = self.seq_len
-        new_int = np.empty(n, dtype=np.int32)
-        for j, edge in enumerate(key):
-            if edge not in self._edge_to_id:
-                self._edge_to_id[edge] = self._next_id
-                self._next_id += 1
-            new_int[j] = self._edge_to_id[edge]
+        new_int = self._encode_circuit(key)
 
-        # Grow the int array
-        new_circuits_int = np.empty((new_idx + 1, n), dtype=np.int32)
-        if new_idx > 0:
-            new_circuits_int[:new_idx] = self._circuits_int
-        new_circuits_int[new_idx] = new_int
-        self._circuits_int = new_circuits_int
+        if new_idx >= self._capacity:
+            self._grow_capacity()
 
-        # Batch-compute SSK kernel between new circuit and all existing
+        self._circuits_int[new_idx] = new_int
+
+        # Batch-compute SSK kernel between new circuit and all registered (including self)
         P = new_idx + 1
+        n = self.seq_len
         D = self.D_matrix
         match_sq = self.match_sq
 
-        ci = np.broadcast_to(new_int[None, :], (P, n))   # new circuit repeated
-        cj = self._circuits_int                            # all circuits
-        S = (ci[:, :, None] == cj[:, None, :]).astype(np.float64)  # (P, n, n)
+        ci = np.broadcast_to(new_int[None, :], (P, n))
+        cj = self._circuits_int[:P]
+        S = (ci[:, :, None] == cj[:, None, :]).astype(np.float64)
 
         Kp = np.ones((P, n, n))
         raw_new = match_sq * np.sum(S * Kp, axis=(1, 2))
@@ -596,26 +630,110 @@ class SSKCache:
             Kp = (Kpp.transpose(0, 2, 1) @ D).transpose(0, 2, 1)
             raw_new += match_sq * np.sum(S * Kp, axis=(1, 2))
 
-        # Grow raw diagonals array
-        raw_diags = np.empty(new_idx + 1)
-        if new_idx > 0:
-            raw_diags[:new_idx] = self._raw_diags
-        raw_diags[new_idx] = raw_new[new_idx]
-        self._raw_diags = raw_diags
-
-        # Expand the normalized kernel matrix by one row/column
-        K_new = np.empty((new_idx + 1, new_idx + 1))
-        if new_idx > 0:
-            K_new[:new_idx, :new_idx] = self._K_norm
+        self._raw_diags[new_idx] = raw_new[new_idx]
 
         diag_new = np.sqrt(max(raw_new[new_idx], 1e-24))
-        diag_all = np.sqrt(np.maximum(self._raw_diags, 1e-24))
+        diag_all = np.sqrt(np.maximum(self._raw_diags[:P], 1e-24))
         norm_row = raw_new / (diag_new * diag_all)
-        K_new[new_idx, :] = norm_row
-        K_new[:, new_idx] = norm_row
+        self._K_norm[new_idx, :P] = norm_row
+        self._K_norm[:P, new_idx] = norm_row
 
-        self._K_norm = K_new
+        self._size += 1
         return new_idx
+
+    def compute_cross_kernel(self, candidate_circuits, scale):
+        """Compute cross-kernel between registered and candidate circuits on-the-fly.
+
+        Returns scale * K_norm_cross of shape (n_registered, n_candidates).
+        Does NOT register the candidates in the cache.
+        """
+        n_reg = self._size
+        n_cand = len(candidate_circuits)
+        if n_reg == 0 or n_cand == 0:
+            return np.empty((n_reg, n_cand))
+
+        n = self.seq_len
+        D = self.D_matrix
+        match_sq = self.match_sq
+
+        # Encode all candidates
+        cand_int = np.empty((n_cand, n), dtype=np.int32)
+        for i, circ in enumerate(candidate_circuits):
+            cand_int[i] = self._encode_circuit(tuple(circ))
+
+        reg_int = self._circuits_int[:n_reg]
+
+        # Compute cross-kernel in batches to limit memory
+        batch_pairs = 10000
+        cand_batch = max(1, batch_pairs // max(n_reg, 1))
+        raw_cross = np.empty((n_reg, n_cand))
+
+        for b_start in range(0, n_cand, cand_batch):
+            b_end = min(b_start + cand_batch, n_cand)
+            bs = b_end - b_start
+            n_pairs = n_reg * bs
+
+            ci = np.repeat(reg_int, bs, axis=0)
+            cj = np.tile(cand_int[b_start:b_end], (n_reg, 1))
+
+            S = (ci[:, :, None] == cj[:, None, :]).astype(np.float64)
+            Kp = np.ones((n_pairs, n, n))
+            raw = match_sq * np.sum(S * Kp, axis=(1, 2))
+
+            for _ in range(self.order - 1):
+                Kpp = match_sq * ((S * Kp) @ D)
+                Kp = (Kpp.transpose(0, 2, 1) @ D).transpose(0, 2, 1)
+                raw += match_sq * np.sum(S * Kp, axis=(1, 2))
+
+            raw_cross[:, b_start:b_end] = raw.reshape(n_reg, bs)
+
+        # Compute candidate self-kernels for normalization
+        cand_self_raw = np.empty(n_cand)
+        for b_start in range(0, n_cand, batch_pairs):
+            b_end = min(b_start + batch_pairs, n_cand)
+            b_cand = cand_int[b_start:b_end]
+            bs = b_end - b_start
+
+            S_self = (b_cand[:, :, None] == b_cand[:, None, :]).astype(np.float64)
+            Kp_self = np.ones((bs, n, n))
+            raw_self = match_sq * np.sum(S_self * Kp_self, axis=(1, 2))
+
+            for _ in range(self.order - 1):
+                Kpp_self = match_sq * ((S_self * Kp_self) @ D)
+                Kp_self = (Kpp_self.transpose(0, 2, 1) @ D).transpose(0, 2, 1)
+                raw_self += match_sq * np.sum(S_self * Kp_self, axis=(1, 2))
+
+            cand_self_raw[b_start:b_end] = raw_self
+
+        # Normalize
+        reg_diags = np.sqrt(np.maximum(self._raw_diags[:n_reg], 1e-24))
+        cand_diags = np.sqrt(np.maximum(cand_self_raw, 1e-24))
+        K_norm_cross = raw_cross / (reg_diags[:, None] * cand_diags[None, :])
+
+        return scale * K_norm_cross
+
+    def kernel_between(self, circuit_a, circuit_b):
+        """Compute normalized SSK kernel between two arbitrary circuits."""
+        int_a = self._encode_circuit(tuple(circuit_a))
+        int_b = self._encode_circuit(tuple(circuit_b))
+        n = self.seq_len
+        D = self.D_matrix
+        match_sq = self.match_sq
+
+        ci = np.array([int_a, int_a, int_b])
+        cj = np.array([int_b, int_a, int_b])
+        S = (ci[:, :, None] == cj[:, None, :]).astype(np.float64)
+        Kp = np.ones((3, n, n))
+        raw = match_sq * np.sum(S * Kp, axis=(1, 2))
+
+        for _ in range(self.order - 1):
+            Kpp = match_sq * ((S * Kp) @ D)
+            Kp = (Kpp.transpose(0, 2, 1) @ D).transpose(0, 2, 1)
+            raw += match_sq * np.sum(S * Kp, axis=(1, 2))
+
+        raw_ab, raw_aa, raw_bb = float(raw[0]), float(raw[1]), float(raw[2])
+        denom = np.sqrt(max(raw_aa, 1e-24) * max(raw_bb, 1e-24))
+        return raw_ab / denom
 
     def kernel_matrix(self, idx1, idx2, scale):
         return scale * self._K_norm[np.ix_(idx1, idx2)]
@@ -943,15 +1061,9 @@ class qgd_SurSearch:
                 print("Cannot generate new candidates")
                 break
 
-            # Register candidates in SSK cache
-            for c in candidates:
-                ssk_cache.register(c)
-
-            # Build feature matrices (indices into SSK cache)
+            # Build feature matrix for training circuits (only registered)
             F_train = np.array([[float(ssk_cache.circuit_to_idx[tuple(x)])]
                                 for x in X])
-            F_cand = np.array([[float(ssk_cache.circuit_to_idx[tuple(c)])]
-                               for c in candidates])
 
             # Dynamic floor + log transform (same as search_over_D)
             nonzero_y = y[y > 0]
@@ -990,25 +1102,68 @@ class qgd_SurSearch:
             gp_scale_disp = float(np.exp(gp_kernel_params[0]))
             gp_noise_disp = gp_noise
 
-            # Acquisition function
-            log_mu_norm, log_std_norm = gp.predict(F_cand, return_std=True,
-                                                    include_noise=False)
+            # Compute cross-kernel and predict without registering candidates
+            scale = float(np.exp(gp.kernel_params[0]))
+            Ks = ssk_cache.compute_cross_kernel(candidates, scale)
+            log_mu_norm = Ks.T @ gp.alpha
+            kss_diag = np.full(len(candidates), scale)
+            v = np.linalg.solve(gp.L, Ks)
+            var = np.maximum(kss_diag - np.sum(v * v, axis=0), 0.0)
+            log_std_norm = np.sqrt(var)
 
             acq_vals = self.lcb(log_mu_norm, log_std_norm)
 
-            selected_idx = int(np.argmin(acq_vals))
-            acq_disp = float(acq_vals[selected_idx])
+            # Select top-k diverse candidates
+            topk = self.config.get('topk_per_iter', 1)
+            diversity_thresh = self.config.get('topk_diversity_threshold', 0.95)
+            sorted_indices = np.argsort(acq_vals)
+            selected_indices = []
+            for sidx in sorted_indices:
+                if len(selected_indices) >= topk:
+                    break
+                sidx = int(sidx)
+                too_similar = (
+                    any(ssk_cache.kernel_between(candidates[sidx], candidates[p])
+                        > diversity_thresh for p in selected_indices)
+                    if selected_indices and diversity_thresh < 1.0 else False
+                )
+                if not too_similar:
+                    selected_indices.append(sidx)
 
-            # Evaluate best candidate
-            _t = time.time()
-            new_score, new_params = self.decompose(candidates[selected_idx])
-            _decompose_time += time.time() - _t
-            _decompose_count += 1
+            acq_disp = float(acq_vals[selected_indices[0]])
 
-            if new_score < best_score:
-                best_score = new_score
-                best_circ = candidates[selected_idx]
-                best_params = new_params
+            # Evaluate selected candidates
+            improved_this_iter = False
+            for sel_idx in selected_indices:
+                _t = time.time()
+                new_score, new_params = self.decompose(candidates[sel_idx])
+                _decompose_time += time.time() - _t
+                _decompose_count += 1
+
+                ssk_cache.register(candidates[sel_idx])
+                y = np.append(y, new_score)
+                X.append(candidates[sel_idx])
+
+                if new_score < best_score:
+                    best_score = new_score
+                    best_circ = candidates[sel_idx]
+                    best_params = new_params
+                    improved_this_iter = True
+
+                if new_score < tolerance:
+                    msg = f"Success at iteration: {itr}"
+                    print(msg)
+                    with open(log_file, 'a') as f:
+                        f.write(msg + "\n")
+                    self.best_score = new_score
+                    self.best_params = new_params
+                    self.best_circ = candidates[sel_idx]
+                    self._decompose_time = _decompose_time
+                    self._decompose_count = _decompose_count
+                    self._total_search_time = time.time() - _search_t0
+                    return candidates[sel_idx]
+
+            if improved_this_iter:
                 iters_since_improvement = 0
             else:
                 iters_since_improvement += 1
@@ -1017,9 +1172,9 @@ class qgd_SurSearch:
                 f"Iteration {itr}:",
                 f"  acq_val={acq_disp:.6f}",
                 f"  GP: scale={gp_scale_disp:.4f}, noise={gp_noise_disp:.6f}",
-                f"  Actual score: {new_score:.6f}",
+                f"  Evaluated {len(selected_indices)} candidate(s)",
                 f"  Best score so far: {best_score:.6f} "
-                f"({len(X)+1} evaluated, {len(candidates)} candidates generated)",
+                f"({len(X)} evaluated, {len(candidates)} candidates generated)",
                 f"  y stats: min={np.min(y):.4f}, mean={np.mean(y):.4f}, "
                 f"std={np.std(y):.4f}",
             ]
@@ -1028,28 +1183,12 @@ class qgd_SurSearch:
             with open(log_file, 'a') as f:
                 f.write("\n".join(lines) + "\n")
 
-            if new_score < tolerance:
-                msg = f"Success at iteration: {itr}"
-                print(msg)
-                with open(log_file, 'a') as f:
-                    f.write(msg + "\n")
-                self.best_score = new_score
-                self.best_params = new_params
-                self.best_circ = candidates[selected_idx]
-                self._decompose_time = _decompose_time
-                self._decompose_count = _decompose_count
-                self._total_search_time = time.time() - _search_t0
-                return candidates[selected_idx]
-
             if iters_since_improvement >= patience:
                 msg = f"Stagnation exit at iteration {itr} (no improvement for {patience} iters)"
                 print(msg)
                 with open(log_file, 'a') as f:
                     f.write(msg + "\n")
                 break
-
-            y = np.append(y, new_score)
-            X.append(candidates[selected_idx])
 
         self.best_score = best_score
         self.best_params = best_params
@@ -1074,7 +1213,7 @@ class qgd_SurSearch:
             else:
                 n_circuits = len(edges) ** D
 
-            max_iters = min(n_circuits // 3, 450)
+            max_iters = min(n_circuits // 3, 25000)
             self.config['max_sur_iters'] = max(max_iters, 1)
 
             log_file = f"{log_file_prefix}_D{D}.txt"

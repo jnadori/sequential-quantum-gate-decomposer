@@ -19,7 +19,7 @@ from SurSearch import qgd_SurSearch
 CIRCS_DIR = "circs"
 RESULTS_CSV = "compilation_results.csv"
 TOLERANCE = 1e-8
-D_START = 5
+
 
 OPTIMIZER_CONFIG = {
     'optimizer': 'BFGS2',
@@ -70,6 +70,7 @@ def main():
         print(f"{'='*60}")
 
         two_qbit_original = count_two_qubit_gates(qasm_file)
+        D_START = max(5,two_qbit_original//2+1)
         Umtx = get_unitary(qasm_file)
         N = int(np.log2(Umtx.shape[0]))
 
