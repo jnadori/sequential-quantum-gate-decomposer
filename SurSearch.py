@@ -228,17 +228,131 @@ def crossover_uniform(seq1, seq2, edge_to_mask, thresholds, max_attempts=50):
     return None
 
 
+def mutate_grow(seq, edges, edge_to_mask, thresholds, D_max, max_attempts=50):
+    """Insert one random edge at a random position (D -> D+1). Respects D_max."""
+    D = len(seq)
+    if D >= D_max:
+        return None
+    E = len(edges)
+    for _ in range(max_attempts):
+        pos = np.random.randint(D + 1)
+        edge = edges[np.random.randint(E)]
+        new_seq = list(seq)
+        new_seq.insert(pos, edge)
+        result = _canonicalize_and_validate(tuple(new_seq), edge_to_mask, thresholds)
+        if result is not None:
+            return result
+    return None
+
+
+def mutate_shrink(seq, edge_to_mask, thresholds, D_min, max_attempts=50):
+    """Remove one edge at a random position (D -> D-1). Respects D_min."""
+    D = len(seq)
+    if D <= D_min:
+        return None
+    for _ in range(max_attempts):
+        pos = np.random.randint(D)
+        new_seq = list(seq)
+        new_seq.pop(pos)
+        result = _canonicalize_and_validate(tuple(new_seq), edge_to_mask, thresholds)
+        if result is not None:
+            return result
+    return None
+
+
+def _local_search_acq(start_seq, edges, edge_to_mask, thresholds,
+                      ssk_cache, gp, scale, kappa,
+                      max_steps=10, seen=None,
+                      D_min=None, D_max=None):
+    """Greedy local search on LCB using discrete gradient (BOSS-style).
+
+    At each step, generates all valid single-position substitution neighbors
+    (and optionally grow/shrink neighbors when D_min/D_max are provided),
+    evaluates their LCB via the GP surrogate (no decomposition calls), and
+    moves to the neighbor with the best (lowest) LCB value.
+    """
+    current = start_seq
+
+    # Evaluate LCB for starting point
+    Ks_cur = ssk_cache.compute_cross_kernel([current], scale)
+    mu_cur = float(Ks_cur.T @ gp.alpha)
+    v_cur = np.linalg.solve(gp.L, Ks_cur)
+    std_cur = np.sqrt(max(scale - float(np.sum(v_cur * v_cur)), 0.0))
+    best_lcb = mu_cur - kappa * std_cur
+
+    steps_taken = 0
+    for step in range(max_steps):
+        D = len(current)
+        neighbors = set()
+
+        # Single-position substitution neighbors
+        for pos in range(D):
+            for edge in edges:
+                if edge == current[pos]:
+                    continue
+                new_seq = list(current)
+                new_seq[pos] = edge
+                candidate = _canonicalize_and_validate(
+                    tuple(new_seq), edge_to_mask, thresholds)
+                if candidate is not None and (seen is None or candidate not in seen):
+                    neighbors.add(candidate)
+
+        # Grow neighbors (D -> D+1)
+        if D_max is not None and D < D_max:
+            for pos in range(D + 1):
+                for edge in edges:
+                    new_seq = list(current)
+                    new_seq.insert(pos, edge)
+                    candidate = _canonicalize_and_validate(
+                        tuple(new_seq), edge_to_mask, thresholds)
+                    if candidate is not None and (seen is None or candidate not in seen):
+                        neighbors.add(candidate)
+
+        # Shrink neighbors (D -> D-1)
+        if D_min is not None and D > D_min:
+            for pos in range(D):
+                new_seq = list(current)
+                new_seq.pop(pos)
+                candidate = _canonicalize_and_validate(
+                    tuple(new_seq), edge_to_mask, thresholds)
+                if candidate is not None and (seen is None or candidate not in seen):
+                    neighbors.add(candidate)
+
+        neighbors = list(neighbors)
+        if not neighbors:
+            break
+
+        # Batch-evaluate LCB for all neighbors via surrogate
+        Ks = ssk_cache.compute_cross_kernel(neighbors, scale)
+        mu = Ks.T @ gp.alpha
+        v = np.linalg.solve(gp.L, Ks)
+        var = np.maximum(scale - np.sum(v * v, axis=0), 0.0)
+        std = np.sqrt(var)
+        lcb_vals = mu.ravel() - kappa * std
+
+        best_idx = int(np.argmin(lcb_vals))
+        if lcb_vals[best_idx] >= best_lcb:
+            break  # local optimum reached
+
+        current = neighbors[best_idx]
+        best_lcb = lcb_vals[best_idx]
+        steps_taken += 1
+
+    return current, best_lcb, steps_taken
+
+
 def _generate_candidates(population, scores, n_candidates, edges, edge_masks,
-                         thresholds, edge_to_mask, seen, tournament_size=3,
-                         block_size=3):
+                         thresholds, edge_to_mask, seen,
+                         ssk_cache=None, gp=None, scale=None, kappa=None,
+                         tournament_size=3, block_size=3,
+                         local_search_fraction=0.5, max_local_steps=10,
+                         D_min=None, D_max=None):
     candidates = []
     n_pop = len(population)
-    D = len(population[0])
     t_size = min(tournament_size, n_pop)
 
-    max_total_attempts = n_candidates * 10
-
     # Pre-generate random numbers in bulk
+    max_total_attempts = n_candidates * 10
     op_probs = np.random.random(max_total_attempts)
     tour_indices = np.random.randint(0, n_pop, size=(max_total_attempts * 2, t_size))
     tour_idx = 0
@@ -250,31 +364,79 @@ def _generate_candidates(population, scores, n_candidates, edges, edge_masks,
         best_idx = indices[np.argmin(scores[indices])]
         return population[best_idx]
 
-    attempts = 0
+    # GP-directed local search candidates
+    n_local_found = 0
+    total_local_steps = 0
+    if ssk_cache is not None and gp is not None:
+        n_local_target = int(n_candidates * local_search_fraction)
+        for _ in range(n_local_target):
+            parent = tournament_select()
+            result, lcb, steps = _local_search_acq(
+                parent, edges, edge_to_mask, thresholds,
+                ssk_cache, gp, scale, kappa,
+                max_steps=max_local_steps, seen=seen,
+                D_min=D_min, D_max=D_max)
+            total_local_steps += steps
+            if result is not None and result not in seen:
+                seen.add(result)
+                candidates.append(result)
+                n_local_found += 1
 
+    mixed_d = D_min is not None and D_max is not None
+
+    # Random candidates via operators
+    attempts = 0
     while len(candidates) < n_candidates and attempts < max_total_attempts:
         r = op_probs[attempts]
         attempts += 1
 
-        if r < 0.40:
-            result = mutate_point(tournament_select(), edges, edge_to_mask, thresholds)
-        elif r < 0.60:
-            result = mutate_swap(tournament_select(), edge_to_mask, thresholds)
-        elif r < 0.75:
-            result = mutate_block(tournament_select(), edges, edge_to_mask,
-                                  thresholds, block_size=block_size)
-        elif r < 0.85:
-            result = crossover_uniform(tournament_select(), tournament_select(),
-                                       edge_to_mask, thresholds)
+        if mixed_d:
+            if r < 0.30:
+                result = mutate_point(tournament_select(), edges, edge_to_mask, thresholds)
+            elif r < 0.45:
+                result = mutate_swap(tournament_select(), edge_to_mask, thresholds)
+            elif r < 0.60:
+                result = mutate_block(tournament_select(), edges, edge_to_mask,
+                                      thresholds, block_size=block_size)
+            elif r < 0.70:
+                p1 = tournament_select()
+                p2 = tournament_select()
+                if len(p1) == len(p2):
+                    result = crossover_uniform(p1, p2, edge_to_mask, thresholds)
+                else:
+                    result = mutate_point(p1, edges, edge_to_mask, thresholds)
+            elif r < 0.80:
+                result = mutate_grow(tournament_select(), edges, edge_to_mask,
+                                     thresholds, D_max)
+            elif r < 0.90:
+                result = mutate_shrink(tournament_select(), edge_to_mask,
+                                       thresholds, D_min)
+            else:
+                rand_D = np.random.randint(D_min, D_max + 1)
+                result = generate_valid_sequence(rand_D, edges, edge_masks,
+                                                  thresholds, edge_to_mask)
         else:
-            result = generate_valid_sequence(D, edges, edge_masks, thresholds,
-                                             edge_to_mask)
+            D = len(population[0])
+            if r < 0.40:
+                result = mutate_point(tournament_select(), edges, edge_to_mask, thresholds)
+            elif r < 0.60:
+                result = mutate_swap(tournament_select(), edge_to_mask, thresholds)
+            elif r < 0.75:
+                result = mutate_block(tournament_select(), edges, edge_to_mask,
+                                      thresholds, block_size=block_size)
+            elif r < 0.85:
+                result = crossover_uniform(tournament_select(), tournament_select(),
+                                           edge_to_mask, thresholds)
+            else:
+                result = generate_valid_sequence(D, edges, edge_masks, thresholds,
+                                                 edge_to_mask)
 
         if result is not None and result not in seen:
             seen.add(result)
             candidates.append(result)
 
-    return candidates
+    avg_steps = total_local_steps / max(n_local_found, 1)
+    return candidates, n_local_found, avg_steps
 
 
 Array = np.ndarray
@@ -488,86 +650,148 @@ def ssk_kernel_value(s1, s2, D, match_sq, order):
     return k
 
 
+def _get_gap_decay_matrix(n, gap_decay, cache={}):
+    """Get or compute gap decay matrix for length n (module-level cache)."""
+    key = (n, gap_decay)
+    if key not in cache:
+        idx = np.arange(n)
+        cache[key] = np.where(
+            idx[None, :] > idx[:, None],
+            gap_decay ** (idx[None, :] - idx[:, None] - 1), 0.0)
+    return cache[key]
+
+
 def ssk_gram_matrix(circuits, gap_decay, match_decay, order):
-    """Compute the full SSK Gram matrix for a list of equal-length circuits.
+    """Compute the full SSK Gram matrix for a list of circuits (variable-length).
 
-    Returns an (n_circuits, n_circuits) symmetric positive-semidefinite matrix
-    and its row-normalized version (kernel values divided by sqrt of diagonals).
-
-    Uses batched numpy operations over all upper-triangle pairs to avoid
-    Python-level nested loops.
+    Returns an (n_circuits, n_circuits) normalized kernel matrix.
+    Groups pairs by (len_i, len_j) for batched computation.
     """
     n_circuits = len(circuits)
-    n = len(circuits[0])
     match_sq = match_decay * match_decay
+    lens = [len(c) for c in circuits]
 
-    # Gap decay matrix (strictly upper triangular)
-    idx = np.arange(n)
-    D = np.where(idx[None, :] > idx[:, None],
-                 gap_decay ** (idx[None, :] - idx[:, None] - 1), 0.0)
+    # Encode all circuits as int arrays
+    edge_to_id = {}
+    next_id = 0
+    circuit_ints = []
+    for circ in circuits:
+        int_arr = np.empty(len(circ), dtype=np.int32)
+        for j, edge in enumerate(circ):
+            if edge not in edge_to_id:
+                edge_to_id[edge] = next_id
+                next_id += 1
+            int_arr[j] = edge_to_id[edge]
+        circuit_ints.append(int_arr)
 
-    # Integer-encode circuits for vectorized comparison
-    ci_arr, _ = _circuits_to_int_array(circuits)
+    lens_arr = np.array(lens, dtype=np.int32)
 
-    # All upper-triangle pairs (including diagonal)
+    # Fast path: all same length
+    if len(set(lens)) == 1:
+        n = lens[0]
+        D = _get_gap_decay_matrix(n, gap_decay)
+        ci_arr = np.stack(circuit_ints)
+        ii, jj = np.triu_indices(n_circuits)
+        P = len(ii)
+
+        ci = ci_arr[ii]
+        cj = ci_arr[jj]
+        S = (ci[:, :, None] == cj[:, None, :]).astype(np.float64)
+
+        Kp = np.ones((P, n, n))
+        k = match_sq * np.sum(S * Kp, axis=(1, 2))
+
+        for _ in range(order - 1):
+            Kpp = match_sq * ((S * Kp) @ D)
+            Kp = (Kpp.transpose(0, 2, 1) @ D).transpose(0, 2, 1)
+            k += match_sq * np.sum(S * Kp, axis=(1, 2))
+
+        K = np.zeros((n_circuits, n_circuits))
+        K[ii, jj] = k
+        K[jj, ii] = k
+
+        diag = np.sqrt(np.diag(K))
+        diag[diag < 1e-12] = 1.0
+        K_norm = K / (diag[:, None] * diag[None, :])
+        return K_norm
+
+    # Variable-length path: group upper-triangle pairs by (len_i, len_j)
     ii, jj = np.triu_indices(n_circuits)
-    P = len(ii)
+    pair_lens_i = lens_arr[ii]
+    pair_lens_j = lens_arr[jj]
 
-    # Batched S matrices: S[p, a, b] = 1 if circuit_ii[p][a] == circuit_jj[p][b]
-    ci = ci_arr[ii]  # (P, n)
-    cj = ci_arr[jj]  # (P, n)
-    S = (ci[:, :, None] == cj[:, None, :]).astype(np.float64)  # (P, n, n)
+    K_raw = np.zeros((n_circuits, n_circuits))
 
-    # Batched DP over subsequence orders
-    Kp = np.ones((P, n, n))
-    k = match_sq * np.sum(S * Kp, axis=(1, 2))  # (P,)
+    unique_len_pairs = set(zip(pair_lens_i.tolist(), pair_lens_j.tolist()))
+    for len_i, len_j in unique_len_pairs:
+        mask = (pair_lens_i == len_i) & (pair_lens_j == len_j)
+        pair_indices = np.where(mask)[0]
+        P = len(pair_indices)
 
-    for _ in range(order - 1):
-        Kpp = match_sq * ((S * Kp) @ D)              # (P, n, n)
-        Kp = (Kpp.transpose(0, 2, 1) @ D).transpose(0, 2, 1)
-        k += match_sq * np.sum(S * Kp, axis=(1, 2))
+        ii_sel = ii[pair_indices]
+        jj_sel = jj[pair_indices]
 
-    # Assemble symmetric Gram matrix
-    K = np.zeros((n_circuits, n_circuits))
-    K[ii, jj] = k
-    K[jj, ii] = k
+        ci = np.stack([circuit_ints[i] for i in ii_sel])
+        cj = np.stack([circuit_ints[j] for j in jj_sel])
 
-    # Normalise: K_norm[i,j] = K[i,j] / sqrt(K[i,i] * K[j,j])
-    diag = np.sqrt(np.diag(K))
+        S = (ci[:, :, None] == cj[:, None, :]).astype(np.float64)
+
+        D_i = _get_gap_decay_matrix(len_i, gap_decay)
+        D_j = _get_gap_decay_matrix(len_j, gap_decay)
+
+        Kp = np.ones((P, len_i, len_j))
+        k = match_sq * np.sum(S * Kp, axis=(1, 2))
+
+        for _ in range(order - 1):
+            Kpp = match_sq * ((S * Kp) @ D_j)
+            Kp = (Kpp.transpose(0, 2, 1) @ D_i).transpose(0, 2, 1)
+            k += match_sq * np.sum(S * Kp, axis=(1, 2))
+
+        K_raw[ii_sel, jj_sel] = k
+        K_raw[jj_sel, ii_sel] = k
+
+    diag = np.sqrt(np.diag(K_raw))
     diag[diag < 1e-12] = 1.0
-    K_norm = K / (diag[:, None] * diag[None, :])
+    K_norm = K_raw / (diag[:, None] * diag[None, :])
     return K_norm
 
 
 class SSKCache:
-    """Incremental SSK kernel cache for evolutionary search.
+    """Incremental SSK kernel cache supporting variable-length circuits.
 
     Computes and caches pairwise SSK kernel values on demand, avoiding
     the need to precompute the full Gram matrix over all circuits.
     Maintains a dense normalized kernel matrix for fast slicing.
     """
 
-    def __init__(self, gap_decay, match_decay, order, seq_len):
+    def __init__(self, gap_decay, match_decay, order):
+        self.gap_decay = gap_decay
         self.match_sq = match_decay * match_decay
         self.order = order
-        self.seq_len = seq_len
         self.circuits = []
         self.circuit_to_idx = {}
-        idx = np.arange(seq_len)
-        self.D_matrix = np.where(
-            idx[None, :] > idx[:, None],
-            gap_decay ** (idx[None, :] - idx[:, None] - 1), 0.0)
+        self._D_matrices = {}
         self._capacity = 64
         self._size = 0
         self._K_norm = np.empty((64, 64))
         self._raw_diags = np.empty(64)
-        self._circuits_int = np.empty((64, seq_len), dtype=np.int32)
+        self._circuits_int = []  # list of variable-length int arrays
+        self._circuit_lens = np.empty(64, dtype=np.int32)
         self._edge_to_id = {}
         self._next_id = 0
 
+    def _get_D_matrix(self, n):
+        """Get or compute gap decay matrix for length n."""
+        if n not in self._D_matrices:
+            idx = np.arange(n)
+            self._D_matrices[n] = np.where(
+                idx[None, :] > idx[:, None],
+                self.gap_decay ** (idx[None, :] - idx[:, None] - 1), 0.0)
+        return self._D_matrices[n]
+
     def _encode_circuit(self, circuit):
         """Encode a circuit (tuple of edges) as an int array using shared edge IDs."""
-        n = self.seq_len
+        n = len(circuit)
         new_int = np.empty(n, dtype=np.int32)
         for j, edge in enumerate(circuit):
             if edge not in self._edge_to_id:
@@ -579,12 +803,11 @@ class SSKCache:
     def _grow_capacity(self):
         """Double the capacity of pre-allocated arrays."""
         new_cap = self._capacity * 2
-        n = self.seq_len
         sz = self._size
 
-        new_circuits_int = np.empty((new_cap, n), dtype=np.int32)
-        new_circuits_int[:sz] = self._circuits_int[:sz]
-        self._circuits_int = new_circuits_int
+        new_lens = np.empty(new_cap, dtype=np.int32)
+        new_lens[:sz] = self._circuit_lens[:sz]
+        self._circuit_lens = new_lens
 
         new_raw_diags = np.empty(new_cap)
         new_raw_diags[:sz] = self._raw_diags[:sz]
@@ -596,6 +819,47 @@ class SSKCache:
 
         self._capacity = new_cap
 
+    def _batch_ssk_raw(self, ci_list, cj_list, n1, n2):
+        """Compute raw SSK values for a batch of (n1, n2) length pairs.
+
+        ci_list: np.array of shape (P, n1) — int-encoded first sequences
+        cj_list: np.array of shape (P, n2) — int-encoded second sequences
+        Returns: np.array of shape (P,) — raw (unnormalized) SSK values
+        """
+        P = ci_list.shape[0]
+        match_sq = self.match_sq
+        D1 = self._get_D_matrix(n1)
+        D2 = self._get_D_matrix(n2)
+
+        S = (ci_list[:, :, None] == cj_list[:, None, :]).astype(np.float64)
+        Kp = np.ones((P, n1, n2))
+        raw = match_sq * np.sum(S * Kp, axis=(1, 2))
+
+        for _ in range(self.order - 1):
+            Kpp = match_sq * ((S * Kp) @ D2)
+            Kp = (Kpp.transpose(0, 2, 1) @ D1).transpose(0, 2, 1)
+            raw += match_sq * np.sum(S * Kp, axis=(1, 2))
+
+        return raw
+
+    def _single_ssk_raw(self, int_a, int_b):
+        """Compute raw SSK value for a single pair of sequences."""
+        n1, n2 = len(int_a), len(int_b)
+        match_sq = self.match_sq
+        D1 = self._get_D_matrix(n1)
+        D2 = self._get_D_matrix(n2)
+
+        S = (int_a[:, None] == int_b[None, :]).astype(np.float64)
+        Kp = np.ones((n1, n2))
+        k = match_sq * float(np.sum(S * Kp))
+
+        for _ in range(self.order - 1):
+            Kpp = match_sq * ((S * Kp) @ D2)
+            Kp = (Kpp.T @ D1).T
+            k += match_sq * float(np.sum(S * Kp))
+
+        return k
+
     def register(self, circuit):
         key = tuple(circuit)
         if key in self.circuit_to_idx:
@@ -606,104 +870,111 @@ class SSKCache:
         self.circuit_to_idx[key] = new_idx
 
         new_int = self._encode_circuit(key)
+        n_new = len(new_int)
 
         if new_idx >= self._capacity:
             self._grow_capacity()
 
-        self._circuits_int[new_idx] = new_int
+        self._circuits_int.append(new_int)
+        self._circuit_lens[new_idx] = n_new
 
-        # Batch-compute SSK kernel between new circuit and all registered (including self)
-        P = new_idx + 1
-        n = self.seq_len
-        D = self.D_matrix
-        match_sq = self.match_sq
+        # Compute raw kernel values: new vs all existing + self
+        raw_new = np.empty(new_idx + 1)
 
-        ci = np.broadcast_to(new_int[None, :], (P, n))
-        cj = self._circuits_int[:P]
-        S = (ci[:, :, None] == cj[:, None, :]).astype(np.float64)
+        # Self-kernel
+        raw_new[new_idx] = self._single_ssk_raw(new_int, new_int)
 
-        Kp = np.ones((P, n, n))
-        raw_new = match_sq * np.sum(S * Kp, axis=(1, 2))
+        # Group existing circuits by length and batch-compute
+        if new_idx > 0:
+            lens = self._circuit_lens[:new_idx]
+            unique_lens = np.unique(lens)
 
-        for _ in range(self.order - 1):
-            Kpp = match_sq * ((S * Kp) @ D)
-            Kp = (Kpp.transpose(0, 2, 1) @ D).transpose(0, 2, 1)
-            raw_new += match_sq * np.sum(S * Kp, axis=(1, 2))
+            for ulen in unique_lens:
+                group_indices = np.where(lens == ulen)[0]
+                P = len(group_indices)
+                ulen = int(ulen)
+
+                cj = np.stack([self._circuits_int[i] for i in group_indices])
+                ci = np.broadcast_to(new_int[:n_new][None, :], (P, n_new))
+
+                raw_new[group_indices] = self._batch_ssk_raw(ci, cj, n_new, ulen)
 
         self._raw_diags[new_idx] = raw_new[new_idx]
 
         diag_new = np.sqrt(max(raw_new[new_idx], 1e-24))
-        diag_all = np.sqrt(np.maximum(self._raw_diags[:P], 1e-24))
+        diag_all = np.sqrt(np.maximum(self._raw_diags[:new_idx + 1], 1e-24))
         norm_row = raw_new / (diag_new * diag_all)
-        self._K_norm[new_idx, :P] = norm_row
-        self._K_norm[:P, new_idx] = norm_row
+        self._K_norm[new_idx, :new_idx + 1] = norm_row
+        self._K_norm[:new_idx + 1, new_idx] = norm_row
 
         self._size += 1
         return new_idx
 
     def compute_cross_kernel(self, candidate_circuits, scale):
-        """Compute cross-kernel between registered and candidate circuits on-the-fly.
+        """Compute cross-kernel between registered and candidate circuits.
 
         Returns scale * K_norm_cross of shape (n_registered, n_candidates).
-        Does NOT register the candidates in the cache.
+        Handles variable-length circuits by grouping by length.
         """
         n_reg = self._size
         n_cand = len(candidate_circuits)
         if n_reg == 0 or n_cand == 0:
             return np.empty((n_reg, n_cand))
 
-        n = self.seq_len
-        D = self.D_matrix
         match_sq = self.match_sq
 
-        # Encode all candidates
-        cand_int = np.empty((n_cand, n), dtype=np.int32)
+        # Encode all candidates and track lengths
+        cand_ints = []
+        cand_lens = np.empty(n_cand, dtype=np.int32)
         for i, circ in enumerate(candidate_circuits):
-            cand_int[i] = self._encode_circuit(tuple(circ))
+            enc = self._encode_circuit(tuple(circ))
+            cand_ints.append(enc)
+            cand_lens[i] = len(enc)
 
-        reg_int = self._circuits_int[:n_reg]
-
-        # Compute cross-kernel in batches to limit memory
-        batch_pairs = 10000
-        cand_batch = max(1, batch_pairs // max(n_reg, 1))
         raw_cross = np.empty((n_reg, n_cand))
+        reg_lens = self._circuit_lens[:n_reg]
+        batch_limit = 10000
 
-        for b_start in range(0, n_cand, cand_batch):
-            b_end = min(b_start + cand_batch, n_cand)
-            bs = b_end - b_start
-            n_pairs = n_reg * bs
+        # Group candidates by length, then registered by length
+        unique_cand_lens = np.unique(cand_lens)
+        for cand_len in unique_cand_lens:
+            cand_len = int(cand_len)
+            cand_indices = np.where(cand_lens == cand_len)[0]
+            n_cand_group = len(cand_indices)
+            cand_group_int = np.stack([cand_ints[i] for i in cand_indices])
 
-            ci = np.repeat(reg_int, bs, axis=0)
-            cj = np.tile(cand_int[b_start:b_end], (n_reg, 1))
+            unique_reg_lens = np.unique(reg_lens)
+            for reg_len in unique_reg_lens:
+                reg_len = int(reg_len)
+                reg_indices = np.where(reg_lens == reg_len)[0]
+                n_reg_group = len(reg_indices)
+                reg_group_int = np.stack(
+                    [self._circuits_int[i] for i in reg_indices])
 
-            S = (ci[:, :, None] == cj[:, None, :]).astype(np.float64)
-            Kp = np.ones((n_pairs, n, n))
-            raw = match_sq * np.sum(S * Kp, axis=(1, 2))
+                cand_batch = max(1, batch_limit // max(n_reg_group, 1))
+                for b_start in range(0, n_cand_group, cand_batch):
+                    b_end = min(b_start + cand_batch, n_cand_group)
+                    bs = b_end - b_start
 
-            for _ in range(self.order - 1):
-                Kpp = match_sq * ((S * Kp) @ D)
-                Kp = (Kpp.transpose(0, 2, 1) @ D).transpose(0, 2, 1)
-                raw += match_sq * np.sum(S * Kp, axis=(1, 2))
+                    ci = np.repeat(reg_group_int, bs, axis=0)
+                    cj = np.tile(cand_group_int[b_start:b_end],
+                                 (n_reg_group, 1))
 
-            raw_cross[:, b_start:b_end] = raw.reshape(n_reg, bs)
+                    raw = self._batch_ssk_raw(ci, cj, reg_len, cand_len)
+                    raw_cross[np.ix_(
+                        reg_indices,
+                        cand_indices[b_start:b_end])] = raw.reshape(
+                            n_reg_group, bs)
 
         # Compute candidate self-kernels for normalization
         cand_self_raw = np.empty(n_cand)
-        for b_start in range(0, n_cand, batch_pairs):
-            b_end = min(b_start + batch_pairs, n_cand)
-            b_cand = cand_int[b_start:b_end]
-            bs = b_end - b_start
+        for cand_len in unique_cand_lens:
+            cand_len = int(cand_len)
+            cand_indices = np.where(cand_lens == cand_len)[0]
+            b_cand = np.stack([cand_ints[i] for i in cand_indices])
 
-            S_self = (b_cand[:, :, None] == b_cand[:, None, :]).astype(np.float64)
-            Kp_self = np.ones((bs, n, n))
-            raw_self = match_sq * np.sum(S_self * Kp_self, axis=(1, 2))
-
-            for _ in range(self.order - 1):
-                Kpp_self = match_sq * ((S_self * Kp_self) @ D)
-                Kp_self = (Kpp_self.transpose(0, 2, 1) @ D).transpose(0, 2, 1)
-                raw_self += match_sq * np.sum(S_self * Kp_self, axis=(1, 2))
-
-            cand_self_raw[b_start:b_end] = raw_self
+            cand_self_raw[cand_indices] = self._batch_ssk_raw(
+                b_cand, b_cand, cand_len, cand_len)
 
         # Normalize
         reg_diags = np.sqrt(np.maximum(self._raw_diags[:n_reg], 1e-24))
@@ -716,22 +987,27 @@ class SSKCache:
         """Compute normalized SSK kernel between two arbitrary circuits."""
         int_a = self._encode_circuit(tuple(circuit_a))
         int_b = self._encode_circuit(tuple(circuit_b))
-        n = self.seq_len
-        D = self.D_matrix
-        match_sq = self.match_sq
+        n1, n2 = len(int_a), len(int_b)
 
-        ci = np.array([int_a, int_a, int_b])
-        cj = np.array([int_b, int_a, int_b])
-        S = (ci[:, :, None] == cj[:, None, :]).astype(np.float64)
-        Kp = np.ones((3, n, n))
-        raw = match_sq * np.sum(S * Kp, axis=(1, 2))
+        if n1 == n2:
+            # Same length: batch all three (ab, aa, bb) together
+            D = self._get_D_matrix(n1)
+            ci = np.array([int_a, int_a, int_b])
+            cj = np.array([int_b, int_a, int_b])
+            S = (ci[:, :, None] == cj[:, None, :]).astype(np.float64)
+            Kp = np.ones((3, n1, n1))
+            raw = self.match_sq * np.sum(S * Kp, axis=(1, 2))
+            for _ in range(self.order - 1):
+                Kpp = self.match_sq * ((S * Kp) @ D)
+                Kp = (Kpp.transpose(0, 2, 1) @ D).transpose(0, 2, 1)
+                raw += self.match_sq * np.sum(S * Kp, axis=(1, 2))
+            raw_ab, raw_aa, raw_bb = float(raw[0]), float(raw[1]), float(raw[2])
+        else:
+            # Different lengths: compute each separately
+            raw_ab = self._single_ssk_raw(int_a, int_b)
+            raw_aa = self._single_ssk_raw(int_a, int_a)
+            raw_bb = self._single_ssk_raw(int_b, int_b)
 
-        for _ in range(self.order - 1):
-            Kpp = match_sq * ((S * Kp) @ D)
-            Kp = (Kpp.transpose(0, 2, 1) @ D).transpose(0, 2, 1)
-            raw += match_sq * np.sum(S * Kp, axis=(1, 2))
-
-        raw_ab, raw_aa, raw_bb = float(raw[0]), float(raw[1]), float(raw[2])
         denom = np.sqrt(max(raw_aa, 1e-24) * max(raw_bb, 1e-24))
         return raw_ab / denom
 
@@ -986,7 +1262,7 @@ class qgd_SurSearch:
         match_decay = self.config.get('ssk_match_decay', 0.8)
         ssk_order = self.config.get('ssk_order', 3)
 
-        ssk_cache = SSKCache(gap_decay, match_decay, ssk_order, self.D)
+        ssk_cache = SSKCache(gap_decay, match_decay, ssk_order)
         seen = set()
 
         # Timing and call counters
@@ -1049,23 +1325,15 @@ class qgd_SurSearch:
             idx2 = F2[:, 0].astype(int)
             return ssk_cache.kernel_matrix(idx1, idx2, scale)
 
+        local_search_fraction = self.config.get('local_search_fraction', 0.5)
+        max_local_steps = self.config.get('max_local_steps', 10)
+
         iters_since_improvement = 0
         for itr in range(max_iters):
-            # Generate candidates via evolutionary operators
-            candidates = _generate_candidates(
-                X, y, candidates_per_iter, edges, edge_masks, thresholds,
-                edge_to_mask, seen, tournament_size=tournament_size,
-                block_size=block_size)
-
-            if not candidates:
-                print("Cannot generate new candidates")
-                break
-
-            # Build feature matrix for training circuits (only registered)
+            # 1. Fit GP first (so local search can use it for directed generation)
             F_train = np.array([[float(ssk_cache.circuit_to_idx[tuple(x)])]
                                 for x in X])
 
-            # Dynamic floor + log transform (same as search_over_D)
             nonzero_y = y[y > 0]
             dynamic_floor = (float(nonzero_y.min()) * 0.01
                              if len(nonzero_y) > 0 else tolerance * 0.01)
@@ -1075,7 +1343,6 @@ class qgd_SurSearch:
             lsig = float(max(log_y.std(), 1e-6))
             log_y_norm = (log_y - lmu) / lsig
 
-            # Fit GP
             gp = GPRegressor(
                 kernel_params=gp_kernel_params.copy(),
                 noise=gp_noise,
@@ -1102,37 +1369,82 @@ class qgd_SurSearch:
             gp_scale_disp = float(np.exp(gp_kernel_params[0]))
             gp_noise_disp = gp_noise
 
-            # Compute cross-kernel and predict without registering candidates
             scale = float(np.exp(gp.kernel_params[0]))
+
+            # 2. Generate candidates via hybrid approach (GP-directed + random)
+            candidates, n_local, avg_local_steps = _generate_candidates(
+                X, y, candidates_per_iter, edges, edge_masks, thresholds,
+                edge_to_mask, seen,
+                ssk_cache=ssk_cache, gp=gp, scale=scale, kappa=self.kappa,
+                tournament_size=tournament_size, block_size=block_size,
+                local_search_fraction=local_search_fraction,
+                max_local_steps=max_local_steps)
+
+            if not candidates:
+                print("Cannot generate new candidates")
+                break
+
+            # 3. Screen all candidates with GP
             Ks = ssk_cache.compute_cross_kernel(candidates, scale)
             log_mu_norm = Ks.T @ gp.alpha
-            kss_diag = np.full(len(candidates), scale)
             v = np.linalg.solve(gp.L, Ks)
-            var = np.maximum(kss_diag - np.sum(v * v, axis=0), 0.0)
+            var = np.maximum(scale - np.sum(v * v, axis=0), 0.0)
             log_std_norm = np.sqrt(var)
 
-            acq_vals = self.lcb(log_mu_norm, log_std_norm)
-
-            # Select top-k diverse candidates
-            topk = self.config.get('topk_per_iter', 1)
+            # Thompson Sampling batch selection
+            n_ts_samples = self.config.get('n_thompson_samples', 10)
             diversity_thresh = self.config.get('topk_diversity_threshold', 0.95)
-            sorted_indices = np.argsort(acq_vals)
-            selected_indices = []
-            for sidx in sorted_indices:
-                if len(selected_indices) >= topk:
+
+            # Posterior covariance at candidate points
+            n_cand = len(candidates)
+            K_cand = scale * ssk_gram_matrix(
+                candidates, gap_decay, match_decay, ssk_order)
+            cov_post = K_cand - v.T @ v
+
+            # Cholesky with jitter for numerical stability
+            jitter = 1e-6
+            L_post = None
+            for _ in range(10):
+                try:
+                    L_post = np.linalg.cholesky(
+                        cov_post + jitter * np.eye(n_cand))
                     break
-                sidx = int(sidx)
-                too_similar = (
-                    any(ssk_cache.kernel_between(candidates[sidx], candidates[p])
-                        > diversity_thresh for p in selected_indices)
-                    if selected_indices and diversity_thresh < 1.0 else False
-                )
-                if not too_similar:
-                    selected_indices.append(sidx)
+                except np.linalg.LinAlgError:
+                    jitter *= 10
+            if L_post is None:
+                L_post = np.diag(log_std_norm)
 
-            acq_disp = float(acq_vals[selected_indices[0]])
+            # Draw posterior samples and pick minimizers
+            mu_cand = log_mu_norm.ravel()
+            selected_indices = []
+            selected_set = set()
+            for _ in range(n_ts_samples):
+                z = np.random.randn(n_cand)
+                f_sample = mu_cand + L_post @ z
+                for sidx in np.argsort(f_sample):
+                    sidx = int(sidx)
+                    if sidx in selected_set:
+                        continue
+                    too_similar = (
+                        any(ssk_cache.kernel_between(
+                                candidates[sidx], candidates[p])
+                            > diversity_thresh for p in selected_indices)
+                        if selected_indices and diversity_thresh < 1.0
+                        else False
+                    )
+                    if not too_similar:
+                        selected_indices.append(sidx)
+                        selected_set.add(sidx)
+                        break
 
-            # Evaluate selected candidates
+            acq_disp = float(
+                mu_cand[selected_indices[0]]
+                - self.kappa * log_std_norm[selected_indices[0]]
+            ) if selected_indices else float('nan')
+            selected_from_local = sum(
+                1 for si in selected_indices if si < n_local)
+
+            # 4. Evaluate selected candidates
             improved_this_iter = False
             for sel_idx in selected_indices:
                 _t = time.time()
@@ -1172,11 +1484,15 @@ class qgd_SurSearch:
                 f"Iteration {itr}:",
                 f"  acq_val={acq_disp:.6f}",
                 f"  GP: scale={gp_scale_disp:.4f}, noise={gp_noise_disp:.6f}",
-                f"  Evaluated {len(selected_indices)} candidate(s)",
+                f"  Evaluated {len(selected_indices)} candidate(s) "
+                f"(Thompson Sampling, {n_ts_samples} draws)",
                 f"  Best score so far: {best_score:.6f} "
                 f"({len(X)} evaluated, {len(candidates)} candidates generated)",
                 f"  y stats: min={np.min(y):.4f}, mean={np.mean(y):.4f}, "
                 f"std={np.std(y):.4f}",
+                f"  Local search: {n_local} candidates, "
+                f"avg {avg_local_steps:.1f} steps, "
+                f"{selected_from_local}/{len(selected_indices)} selected",
             ]
             for line in lines:
                 print(line)
@@ -1199,33 +1515,306 @@ class qgd_SurSearch:
         print("Solution not found")
         return best_circ
 
-    def Start_Decomposition(self, D_start, D_end, log_file_prefix="sursearch"):
+    def search_over_D_range(self, D_min, D_max, log_file="sursearch_cross_d.txt"):
+        """Unified cross-D surrogate search from D_min to D_max.
+
+        Searches over all circuit depths simultaneously using a single GP
+        with variable-length SSK kernel. Biased toward lower D via penalty
+        term in acquisition to find the most compact solution.
+        """
         edges = sorted(set(tuple(e) for e in self.topology))
-        enum_threshold = self.config.get('enum_threshold', 10000)
+        vertices = {v for edge in edges for v in edge}
+        edge_masks = precompute_edge_masks(edges, vertices)
+        thresholds = precompute_thresholds(len(vertices))
+        edge_to_mask = {e: m for e, m in zip(edges, edge_masks)}
+
         tolerance = self.config.get('tolerance', 1e-8)
+        max_iters = self.config.get('max_sur_iters', 450)
+        patience = self.config.get('patience', max(30, max_iters // 3))
+        X0_size = self.config.get('X0_size', 10)
+        candidates_per_iter = self.config.get('candidates_per_iter', 100)
+        tournament_size = self.config.get('tournament_size', 3)
+        block_size = self.config.get('block_mutation_size', 3)
 
-        for D in range(D_start, D_end + 1):
-            self.D = D
+        gap_decay = self.config.get('ssk_gap_decay', 0.8)
+        match_decay = self.config.get('ssk_match_decay', 0.8)
+        ssk_order = self.config.get('ssk_order', 3)
+        d_penalty = self.config.get('d_penalty', 0.1)
 
-            # Estimate circuit count for iteration budget
-            if len(edges) ** D <= enum_threshold:
-                n_circuits = len(unique_k_sequences(self.topology, D))
+        ssk_cache = SSKCache(gap_decay, match_decay, ssk_order)
+        seen = set()
+
+        _decompose_time = 0.0
+        _decompose_count = 0
+        _search_t0 = time.time()
+
+        # Initial random sample — round-robin across D values
+        X = []
+        D_range = list(range(D_min, D_max + 1))
+        attempts = 0
+        while len(X) < X0_size and attempts < X0_size * 100:
+            D_val = D_range[len(X) % len(D_range)]
+            seq = generate_valid_sequence(D_val, edges, edge_masks, thresholds,
+                                          edge_to_mask)
+            attempts += 1
+            if seq is not None and seq not in seen:
+                seen.add(seq)
+                ssk_cache.register(seq)
+                X.append(seq)
+
+        _t = time.time()
+        _init_results = [self.decompose(x) for x in X]
+        _decompose_time += time.time() - _t
+        _decompose_count += len(X)
+        y = np.array([r[0] for r in _init_results])
+        _init_params = [r[1] for r in _init_results]
+        best_idx = int(np.argmin(y))
+        best_score = float(y[best_idx])
+        best_circ = X[best_idx]
+        best_params = _init_params[best_idx]
+
+        with open(log_file, 'w') as f:
+            f.write(f"SurSearch (cross-D) diagnostics: N={self.N}, "
+                    f"D={D_min}-{D_max}, kappa={self.kappa}, "
+                    f"d_penalty={d_penalty}, topology={self.topology}\n")
+            f.write(f"Mode: cross-D evolutionary, initial sample: {X0_size}, "
+                    f"candidates_per_iter: {candidates_per_iter}\n")
+            f.write(f"Initial y stats: min={np.min(y):.6f}, "
+                    f"mean={np.mean(y):.4f}, std={np.std(y):.4f}\n")
+            f.write("-" * 70 + "\n")
+
+        if best_score < tolerance:
+            print(f"Success at random selection (D={len(best_circ)})")
+            with open(log_file, 'a') as f:
+                f.write(f"Success at random selection (D={len(best_circ)})\n")
+            self.best_score = best_score
+            self.best_params = best_params
+            self.best_circ = best_circ
+            self._decompose_time = _decompose_time
+            self._decompose_count = _decompose_count
+            self._total_search_time = time.time() - _search_t0
+            return best_circ
+
+        # GP setup (SSK kernel — single hyperparameter: log_scale)
+        gp_kernel_params = np.array([0.0])
+        gp_noise = 1e-2
+        gp_bounds = [(-3.0, 3.0)]
+        gp_noise_bounds = (-8.0, -1.0)
+
+        def _ssk_kernel_fn(F1, F2, params):
+            scale = float(np.exp(params[0]))
+            idx1 = F1[:, 0].astype(int)
+            idx2 = F2[:, 0].astype(int)
+            return ssk_cache.kernel_matrix(idx1, idx2, scale)
+
+        local_search_fraction = self.config.get('local_search_fraction', 0.5)
+        max_local_steps = self.config.get('max_local_steps', 10)
+
+        iters_since_improvement = 0
+        for itr in range(max_iters):
+            # 1. Fit GP
+            F_train = np.array([[float(ssk_cache.circuit_to_idx[tuple(x)])]
+                                for x in X])
+
+            nonzero_y = y[y > 0]
+            dynamic_floor = (float(nonzero_y.min()) * 0.01
+                             if len(nonzero_y) > 0 else tolerance * 0.01)
+            y_clamped = np.maximum(y, dynamic_floor)
+            log_y = np.log10(y_clamped)
+            lmu = float(log_y.mean())
+            lsig = float(max(log_y.std(), 1e-6))
+            log_y_norm = (log_y - lmu) / lsig
+
+            gp = GPRegressor(
+                kernel_params=gp_kernel_params.copy(),
+                noise=gp_noise,
+                kernel_fn=_ssk_kernel_fn,
+            ).fit(F_train, log_y_norm)
+
+            n_restarts = max(1, 3 - len(X) // 10)
+            try:
+                gp.optimize_hyperparameters(n_restarts=n_restarts,
+                                            kernel_bounds=gp_bounds,
+                                            noise_bounds=gp_noise_bounds)
+            except Exception:
+                pass
+
+            opt_scale = float(np.exp(gp.kernel_params[0]))
+            opt_noise = float(gp.noise)
+            if opt_scale / max(opt_noise, 1e-12) < 0.1:
+                gp_kernel_params = np.array([0.0])
+                gp_noise = 1e-2
             else:
-                n_circuits = len(edges) ** D
+                gp_kernel_params = gp.kernel_params.copy()
+                gp_noise = gp.noise
+            gp_scale_disp = float(np.exp(gp_kernel_params[0]))
+            gp_noise_disp = gp_noise
 
-            max_iters = min(n_circuits // 3, 25000)
-            self.config['max_sur_iters'] = max(max_iters, 1)
+            scale = float(np.exp(gp.kernel_params[0]))
 
-            log_file = f"{log_file_prefix}_D{D}.txt"
-            print(f"--- D={D}: ~{n_circuits} circuits, max_iters={self.config['max_sur_iters']} ---")
-            self.search_over_D(log_file=log_file)
+            # 2. Generate candidates with grow/shrink operators
+            candidates, n_local, avg_local_steps = _generate_candidates(
+                X, y, candidates_per_iter, edges, edge_masks, thresholds,
+                edge_to_mask, seen,
+                ssk_cache=ssk_cache, gp=gp, scale=scale, kappa=self.kappa,
+                tournament_size=tournament_size, block_size=block_size,
+                local_search_fraction=local_search_fraction,
+                max_local_steps=max_local_steps,
+                D_min=D_min, D_max=D_max)
 
-            if self.best_score < tolerance:
-                print(f"Solution found at D={D}")
-                return self.best_circ
+            if not candidates:
+                print("Cannot generate new candidates")
+                break
 
-        print(f"Solution not found up to D={D_end}")
-        return self.best_circ
+            # 3. Screen candidates with GP
+            Ks = ssk_cache.compute_cross_kernel(candidates, scale)
+            log_mu_norm = Ks.T @ gp.alpha
+            v = np.linalg.solve(gp.L, Ks)
+            var = np.maximum(scale - np.sum(v * v, axis=0), 0.0)
+            log_std_norm = np.sqrt(var)
+
+            # Thompson Sampling batch selection with D-penalty
+            n_ts_samples = self.config.get('n_thompson_samples', 10)
+            diversity_thresh = self.config.get('topk_diversity_threshold', 0.95)
+
+            n_cand = len(candidates)
+            K_cand = scale * ssk_gram_matrix(
+                candidates, gap_decay, match_decay, ssk_order)
+            cov_post = K_cand - v.T @ v
+
+            jitter = 1e-6
+            L_post = None
+            for _ in range(10):
+                try:
+                    L_post = np.linalg.cholesky(
+                        cov_post + jitter * np.eye(n_cand))
+                    break
+                except np.linalg.LinAlgError:
+                    jitter *= 10
+            if L_post is None:
+                L_post = np.diag(log_std_norm)
+
+            # Apply D-penalty to posterior mean to bias toward lower D
+            mu_cand = log_mu_norm.ravel().copy()
+            if d_penalty > 0:
+                cand_D_vals = np.array([len(c) for c in candidates],
+                                       dtype=np.float64)
+                mu_cand += d_penalty * (cand_D_vals / D_max)
+
+            selected_indices = []
+            selected_set = set()
+            for _ in range(n_ts_samples):
+                z = np.random.randn(n_cand)
+                f_sample = mu_cand + L_post @ z
+                for sidx in np.argsort(f_sample):
+                    sidx = int(sidx)
+                    if sidx in selected_set:
+                        continue
+                    too_similar = (
+                        any(ssk_cache.kernel_between(
+                                candidates[sidx], candidates[p])
+                            > diversity_thresh for p in selected_indices)
+                        if selected_indices and diversity_thresh < 1.0
+                        else False
+                    )
+                    if not too_similar:
+                        selected_indices.append(sidx)
+                        selected_set.add(sidx)
+                        break
+
+            acq_disp = float(
+                log_mu_norm.ravel()[selected_indices[0]]
+                - self.kappa * log_std_norm[selected_indices[0]]
+            ) if selected_indices else float('nan')
+            selected_from_local = sum(
+                1 for si in selected_indices if si < n_local)
+
+            # 4. Evaluate selected candidates
+            improved_this_iter = False
+            for sel_idx in selected_indices:
+                _t = time.time()
+                new_score, new_params = self.decompose(candidates[sel_idx])
+                _decompose_time += time.time() - _t
+                _decompose_count += 1
+
+                ssk_cache.register(candidates[sel_idx])
+                y = np.append(y, new_score)
+                X.append(candidates[sel_idx])
+
+                if new_score < best_score:
+                    best_score = new_score
+                    best_circ = candidates[sel_idx]
+                    best_params = new_params
+                    improved_this_iter = True
+
+                if new_score < tolerance:
+                    D_found = len(candidates[sel_idx])
+                    msg = f"Success at iteration: {itr} (D={D_found})"
+                    print(msg)
+                    with open(log_file, 'a') as f:
+                        f.write(msg + "\n")
+                    self.best_score = new_score
+                    self.best_params = new_params
+                    self.best_circ = candidates[sel_idx]
+                    self._decompose_time = _decompose_time
+                    self._decompose_count = _decompose_count
+                    self._total_search_time = time.time() - _search_t0
+                    return candidates[sel_idx]
+
+            if improved_this_iter:
+                iters_since_improvement = 0
+            else:
+                iters_since_improvement += 1
+
+            # D distribution stats
+            cand_d_counts = {}
+            for c in candidates:
+                d = len(c)
+                cand_d_counts[d] = cand_d_counts.get(d, 0) + 1
+            d_dist_str = ", ".join(
+                f"D{d}:{n}" for d, n in sorted(cand_d_counts.items()))
+
+            lines = [
+                f"Iteration {itr}:",
+                f"  acq_val={acq_disp:.6f}",
+                f"  GP: scale={gp_scale_disp:.4f}, noise={gp_noise_disp:.6f}",
+                f"  Evaluated {len(selected_indices)} candidate(s) "
+                f"(Thompson Sampling, {n_ts_samples} draws)",
+                f"  Best score so far: {best_score:.6f} (D={len(best_circ)})"
+                f" ({len(X)} evaluated, {len(candidates)} candidates)",
+                f"  y stats: min={np.min(y):.4f}, mean={np.mean(y):.4f}, "
+                f"std={np.std(y):.4f}",
+                f"  Local search: {n_local} candidates, "
+                f"avg {avg_local_steps:.1f} steps, "
+                f"{selected_from_local}/{len(selected_indices)} selected",
+                f"  D distribution: {d_dist_str}",
+            ]
+            for line in lines:
+                print(line)
+            with open(log_file, 'a') as f:
+                f.write("\n".join(lines) + "\n")
+
+            if iters_since_improvement >= patience:
+                msg = (f"Stagnation exit at iteration {itr} "
+                       f"(no improvement for {patience} iters)")
+                print(msg)
+                with open(log_file, 'a') as f:
+                    f.write(msg + "\n")
+                break
+
+        self.best_score = best_score
+        self.best_params = best_params
+        self.best_circ = best_circ
+        self._decompose_time = _decompose_time
+        self._decompose_count = _decompose_count
+        self._total_search_time = time.time() - _search_t0
+        print("Solution not found")
+        return best_circ
+
+    def Start_Decomposition(self, D_start, D_end, log_file_prefix="sursearch"):
+        return self.search_over_D_range(
+            D_start, D_end,
+            log_file=f"{log_file_prefix}_D{D_start}-{D_end}.txt")
 
     def decompose(self, x):
         optimizer = self.config.get('optimizer', 'BFGS')
