@@ -653,7 +653,7 @@ class qgd_Partition_Aware_Mapping:
                     )
                     pre_cleanup_cnots = trial_circuit.get_Gate_Nums().get('CNOT', 0)
                     trial_circuit, trial_params = wco.OptimizeWideCircuit(
-                        trial_circuit.get_Flat_Circuit(), trial_params, 3
+                        trial_circuit.get_Flat_Circuit(), trial_params, global_min=False, part_size_end=3
                     )
 
                     cost = trial_circuit.get_Gate_Nums().get('CNOT', 0)
@@ -727,7 +727,7 @@ class qgd_Partition_Aware_Mapping:
                 cleanup_config['test_final_circuit'] = False
                 wco = qgd_Wide_Circuit_Optimization(cleanup_config)
                 final_circuit, final_parameters = wco.OptimizeWideCircuit(
-                    final_circuit.get_Flat_Circuit(), final_parameters, 3
+                    final_circuit.get_Flat_Circuit(), final_parameters, global_min=False, part_size_end=3
                 )
 
         return final_circuit, final_parameters, pi_initial, pi
