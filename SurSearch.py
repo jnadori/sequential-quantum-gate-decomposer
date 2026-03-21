@@ -7,8 +7,9 @@ import numpy as np
 from scipy.optimize import minimize
 from squander import N_Qubit_Decomposition_custom, Circuit
 
-from math import ceil
+from math import ceil, log2
 import heapq
+import itertools
 import time
 
 
@@ -141,20 +142,141 @@ def unique_k_sequences(topology, k):
 
 
 # ---------------------------------------------------------------------------
+# Operator Schmidt Rank (OSR) — per-cut CNOT lower bounds
+# ---------------------------------------------------------------------------
+
+def _unique_cuts(n):
+    """All nontrivial unordered bipartitions (no complements) for n qubits."""
+    qubits = tuple(range(n))
+    for r in range(1, n // 2 + 1):
+        for S in itertools.combinations(qubits, r):
+            if r < n - r:
+                yield S
+            else:
+                comp = tuple(q for q in qubits if q not in S)
+                if S < comp:
+                    yield S
+
+
+def _build_osr_matrix(U, n, A):
+    """Reshape unitary U into operator Schmidt form for bipartition A|B."""
+    A = list(reversed(A))
+    B = list(sorted(set(range(n)) - set(A), reverse=True))
+    A, B = [n - 1 - q for q in A], [n - 1 - q for q in B]
+    dA = 1 << len(A)
+    dB = 1 << len(B)
+    return U.reshape([2] * (2 * n)).transpose(
+        tuple(A) + tuple(t + n for t in A) +
+        tuple(B) + tuple(t + n for t in B)
+    ).reshape(dA * dA, dB * dB)
+
+
+def _operator_schmidt_rank(U, n, A, Fnorm, tol=1e-3):
+    """Compute operator Schmidt rank for bipartition A. Returns (rank, singular_values)."""
+    M = _build_osr_matrix(U, n, A)
+    s = np.linalg.svd(M, full_matrices=False, compute_uv=False) / Fnorm
+    rank = int(np.sum(s >= s[0] * tol))
+    return rank, s
+
+
+def compute_osr_cut_bounds(U, N, topology):
+    """Compute per-cut CNOT lower bounds from OSR on the raw unitary.
+
+    Returns:
+        cuts: list of tuples (qubit subsets defining each bipartition cut)
+        cut_cnot_bounds: list of int (minimum CNOTs that must cross each cut)
+        cut_crossing_edges: list of list of int (topology edge indices crossing each cut)
+    """
+    Fnorm = np.sqrt(2 ** N)
+    edges = sorted(set(tuple(e) for e in topology))
+    cuts = list(_unique_cuts(N))
+
+    cut_cnot_bounds = []
+    cut_crossing_edges = []
+    for cut in cuts:
+        rank, _ = _operator_schmidt_rank(U, N, list(cut), Fnorm, tol=1e-3)
+        cut_cnot_bounds.append(int(ceil(log2(max(rank, 1)))) if rank > 1 else 0)
+
+        in_cut = set(cut)
+        crossing = [i for i, (a, b) in enumerate(edges)
+                     if (a in in_cut) != (b in in_cut)]
+        cut_crossing_edges.append(crossing)
+
+    return cuts, cut_cnot_bounds, cut_crossing_edges
+
+
+def solve_min_D(cut_cnot_bounds, cut_crossing_edges, num_edges):
+    """Find minimum total CNOTs satisfying all cut bounds.
+
+    Port of C++ MinCnotBoundSolver — brute-force composition enumeration.
+    """
+    if all(b <= 0 for b in cut_cnot_bounds):
+        return 0
+
+    def composition_satisfies(edge_counts):
+        for bound, crossing in zip(cut_cnot_bounds, cut_crossing_edges):
+            if bound <= 0:
+                continue
+            if sum(edge_counts[e] for e in crossing) < bound:
+                return False
+        return True
+
+    def feasible_for_total(total, edge_counts, pos, used_sum):
+        if pos == num_edges - 1:
+            edge_counts[pos] = total - used_sum
+            return composition_satisfies(edge_counts)
+        remaining = total - used_sum
+        for x in range(remaining + 1):
+            edge_counts[pos] = x
+            if feasible_for_total(total, edge_counts, pos + 1, used_sum + x):
+                return True
+        return False
+
+    max_total = sum(cut_cnot_bounds)
+    for total in range(max_total + 1):
+        edge_counts = [0] * num_edges
+        if feasible_for_total(total, edge_counts, 0, 0):
+            return total
+    return max_total
+
+
+def check_osr_feasibility(seq, edge_to_idx, cut_crossing_edges, cut_cnot_bounds):
+    """Return False if sequence has too few CNOTs crossing any cut. Hard reject."""
+    num_edges = len(edge_to_idx)
+    edge_counts = [0] * num_edges
+    for e in seq:
+        idx = edge_to_idx.get(e)
+        if idx is not None:
+            edge_counts[idx] += 1
+    for bound, crossing in zip(cut_cnot_bounds, cut_crossing_edges):
+        if bound <= 0:
+            continue
+        if sum(edge_counts[eidx] for eidx in crossing) < bound:
+            return False
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Random sequence generation & mutation operators (for large-D evolutionary search)
 # ---------------------------------------------------------------------------
 
-def _canonicalize_and_validate(seq, edge_to_mask, thresholds):
+def _canonicalize_and_validate(seq, edge_to_mask, thresholds, osr_info=None):
     masks = [edge_to_mask[e] for e in seq]
     canon = canonical_form(seq, masks)
     canon_masks = [edge_to_mask[e] for e in canon]
     for depth in range(len(canon)):
         if check_new_position(canon_masks, depth, thresholds):
             return None
+    if osr_info is not None:
+        edge_to_idx, cut_crossing_edges, cut_cnot_bounds = osr_info
+        if not check_osr_feasibility(canon, edge_to_idx, cut_crossing_edges,
+                                     cut_cnot_bounds):
+            return None
     return canon
 
 
-def generate_valid_sequence(D, edges, edge_masks, thresholds, edge_to_mask):
+def generate_valid_sequence(D, edges, edge_masks, thresholds, edge_to_mask,
+                            osr_info=None):
     E = len(edges)
     path = [None] * D
     path_masks = [0] * D
@@ -172,23 +294,26 @@ def generate_valid_sequence(D, edges, edge_masks, thresholds, edge_to_mask):
         path[depth] = edges[chosen]
         path_masks[depth] = edge_masks[chosen]
 
-    return _canonicalize_and_validate(tuple(path), edge_to_mask, thresholds)
+    return _canonicalize_and_validate(tuple(path), edge_to_mask, thresholds,
+                                     osr_info=osr_info)
 
 
-def mutate_point(seq, edges, edge_to_mask, thresholds, max_attempts=50):
+def mutate_point(seq, edges, edge_to_mask, thresholds, max_attempts=50,
+                 osr_info=None):
     D = len(seq)
     E = len(edges)
     for _ in range(max_attempts):
         pos = np.random.randint(D)
         new_seq = list(seq)
         new_seq[pos] = edges[np.random.randint(E)]
-        result = _canonicalize_and_validate(tuple(new_seq), edge_to_mask, thresholds)
+        result = _canonicalize_and_validate(tuple(new_seq), edge_to_mask,
+                                            thresholds, osr_info=osr_info)
         if result is not None:
             return result
     return None
 
 
-def mutate_swap(seq, edge_to_mask, thresholds, max_attempts=50):
+def mutate_swap(seq, edge_to_mask, thresholds, max_attempts=50, osr_info=None):
     D = len(seq)
     if D < 2:
         return None
@@ -196,13 +321,15 @@ def mutate_swap(seq, edge_to_mask, thresholds, max_attempts=50):
         i, j = np.random.choice(D, size=2, replace=False)
         new_seq = list(seq)
         new_seq[i], new_seq[j] = new_seq[j], new_seq[i]
-        result = _canonicalize_and_validate(tuple(new_seq), edge_to_mask, thresholds)
+        result = _canonicalize_and_validate(tuple(new_seq), edge_to_mask,
+                                            thresholds, osr_info=osr_info)
         if result is not None:
             return result
     return None
 
 
-def mutate_block(seq, edges, edge_to_map, thresholds, block_size=3, max_attempts=50):
+def mutate_block(seq, edges, edge_to_map, thresholds, block_size=3,
+                 max_attempts=50, osr_info=None):
     D = len(seq)
     E = len(edges)
     bs = min(block_size, D)
@@ -211,24 +338,28 @@ def mutate_block(seq, edges, edge_to_map, thresholds, block_size=3, max_attempts
         new_seq = list(seq)
         for pos in range(start, start + bs):
             new_seq[pos] = edges[np.random.randint(E)]
-        result = _canonicalize_and_validate(tuple(new_seq), edge_to_map, thresholds)
+        result = _canonicalize_and_validate(tuple(new_seq), edge_to_map,
+                                            thresholds, osr_info=osr_info)
         if result is not None:
             return result
     return None
 
 
-def crossover_uniform(seq1, seq2, edge_to_mask, thresholds, max_attempts=50):
+def crossover_uniform(seq1, seq2, edge_to_mask, thresholds, max_attempts=50,
+                      osr_info=None):
     D = len(seq1)
     for _ in range(max_attempts):
         new_seq = tuple(seq1[i] if np.random.random() < 0.5 else seq2[i]
                         for i in range(D))
-        result = _canonicalize_and_validate(new_seq, edge_to_mask, thresholds)
+        result = _canonicalize_and_validate(new_seq, edge_to_mask, thresholds,
+                                            osr_info=osr_info)
         if result is not None:
             return result
     return None
 
 
-def mutate_grow(seq, edges, edge_to_mask, thresholds, D_max, max_attempts=50):
+def mutate_grow(seq, edges, edge_to_mask, thresholds, D_max, max_attempts=50,
+                osr_info=None):
     """Insert one random edge at a random position (D -> D+1). Respects D_max."""
     D = len(seq)
     if D >= D_max:
@@ -239,13 +370,15 @@ def mutate_grow(seq, edges, edge_to_mask, thresholds, D_max, max_attempts=50):
         edge = edges[np.random.randint(E)]
         new_seq = list(seq)
         new_seq.insert(pos, edge)
-        result = _canonicalize_and_validate(tuple(new_seq), edge_to_mask, thresholds)
+        result = _canonicalize_and_validate(tuple(new_seq), edge_to_mask,
+                                            thresholds, osr_info=osr_info)
         if result is not None:
             return result
     return None
 
 
-def mutate_shrink(seq, edge_to_mask, thresholds, D_min, max_attempts=50):
+def mutate_shrink(seq, edge_to_mask, thresholds, D_min, max_attempts=50,
+                  osr_info=None):
     """Remove one edge at a random position (D -> D-1). Respects D_min."""
     D = len(seq)
     if D <= D_min:
@@ -254,7 +387,8 @@ def mutate_shrink(seq, edge_to_mask, thresholds, D_min, max_attempts=50):
         pos = np.random.randint(D)
         new_seq = list(seq)
         new_seq.pop(pos)
-        result = _canonicalize_and_validate(tuple(new_seq), edge_to_mask, thresholds)
+        result = _canonicalize_and_validate(tuple(new_seq), edge_to_mask,
+                                            thresholds, osr_info=osr_info)
         if result is not None:
             return result
     return None
@@ -263,7 +397,7 @@ def mutate_shrink(seq, edge_to_mask, thresholds, D_min, max_attempts=50):
 def _local_search_acq(start_seq, edges, edge_to_mask, thresholds,
                       ssk_cache, gp, scale, kappa,
                       max_steps=10, seen=None,
-                      D_min=None, D_max=None):
+                      D_min=None, D_max=None, osr_info=None):
     """Greedy local search on LCB using discrete gradient (BOSS-style).
 
     At each step, generates all valid single-position substitution neighbors
@@ -293,7 +427,8 @@ def _local_search_acq(start_seq, edges, edge_to_mask, thresholds,
                 new_seq = list(current)
                 new_seq[pos] = edge
                 candidate = _canonicalize_and_validate(
-                    tuple(new_seq), edge_to_mask, thresholds)
+                    tuple(new_seq), edge_to_mask, thresholds,
+                    osr_info=osr_info)
                 if candidate is not None and (seen is None or candidate not in seen):
                     neighbors.add(candidate)
 
@@ -304,7 +439,8 @@ def _local_search_acq(start_seq, edges, edge_to_mask, thresholds,
                     new_seq = list(current)
                     new_seq.insert(pos, edge)
                     candidate = _canonicalize_and_validate(
-                        tuple(new_seq), edge_to_mask, thresholds)
+                        tuple(new_seq), edge_to_mask, thresholds,
+                        osr_info=osr_info)
                     if candidate is not None and (seen is None or candidate not in seen):
                         neighbors.add(candidate)
 
@@ -314,7 +450,8 @@ def _local_search_acq(start_seq, edges, edge_to_mask, thresholds,
                 new_seq = list(current)
                 new_seq.pop(pos)
                 candidate = _canonicalize_and_validate(
-                    tuple(new_seq), edge_to_mask, thresholds)
+                    tuple(new_seq), edge_to_mask, thresholds,
+                    osr_info=osr_info)
                 if candidate is not None and (seen is None or candidate not in seen):
                     neighbors.add(candidate)
 
@@ -346,7 +483,7 @@ def _generate_candidates(population, scores, n_candidates, edges, edge_masks,
                          ssk_cache=None, gp=None, scale=None, kappa=None,
                          tournament_size=3, block_size=3,
                          local_search_fraction=0.5, max_local_steps=10,
-                         D_min=None, D_max=None):
+                         D_min=None, D_max=None, osr_info=None):
     candidates = []
     n_pop = len(population)
     t_size = min(tournament_size, n_pop)
@@ -375,7 +512,7 @@ def _generate_candidates(population, scores, n_candidates, edges, edge_masks,
                 parent, edges, edge_to_mask, thresholds,
                 ssk_cache, gp, scale, kappa,
                 max_steps=max_local_steps, seen=seen,
-                D_min=D_min, D_max=D_max)
+                D_min=D_min, D_max=D_max, osr_info=osr_info)
             total_local_steps += steps
             if result is not None and result not in seen:
                 seen.add(result)
@@ -392,44 +529,54 @@ def _generate_candidates(population, scores, n_candidates, edges, edge_masks,
 
         if mixed_d:
             if r < 0.30:
-                result = mutate_point(tournament_select(), edges, edge_to_mask, thresholds)
+                result = mutate_point(tournament_select(), edges, edge_to_mask,
+                                      thresholds, osr_info=osr_info)
             elif r < 0.45:
-                result = mutate_swap(tournament_select(), edge_to_mask, thresholds)
+                result = mutate_swap(tournament_select(), edge_to_mask,
+                                     thresholds, osr_info=osr_info)
             elif r < 0.60:
                 result = mutate_block(tournament_select(), edges, edge_to_mask,
-                                      thresholds, block_size=block_size)
+                                      thresholds, block_size=block_size,
+                                      osr_info=osr_info)
             elif r < 0.70:
                 p1 = tournament_select()
                 p2 = tournament_select()
                 if len(p1) == len(p2):
-                    result = crossover_uniform(p1, p2, edge_to_mask, thresholds)
+                    result = crossover_uniform(p1, p2, edge_to_mask, thresholds,
+                                               osr_info=osr_info)
                 else:
-                    result = mutate_point(p1, edges, edge_to_mask, thresholds)
+                    result = mutate_point(p1, edges, edge_to_mask, thresholds,
+                                          osr_info=osr_info)
             elif r < 0.80:
                 result = mutate_grow(tournament_select(), edges, edge_to_mask,
-                                     thresholds, D_max)
+                                     thresholds, D_max, osr_info=osr_info)
             elif r < 0.90:
                 result = mutate_shrink(tournament_select(), edge_to_mask,
-                                       thresholds, D_min)
+                                       thresholds, D_min, osr_info=osr_info)
             else:
                 rand_D = np.random.randint(D_min, D_max + 1)
                 result = generate_valid_sequence(rand_D, edges, edge_masks,
-                                                  thresholds, edge_to_mask)
+                                                  thresholds, edge_to_mask,
+                                                  osr_info=osr_info)
         else:
             D = len(population[0])
             if r < 0.40:
-                result = mutate_point(tournament_select(), edges, edge_to_mask, thresholds)
+                result = mutate_point(tournament_select(), edges, edge_to_mask,
+                                      thresholds, osr_info=osr_info)
             elif r < 0.60:
-                result = mutate_swap(tournament_select(), edge_to_mask, thresholds)
+                result = mutate_swap(tournament_select(), edge_to_mask,
+                                     thresholds, osr_info=osr_info)
             elif r < 0.75:
                 result = mutate_block(tournament_select(), edges, edge_to_mask,
-                                      thresholds, block_size=block_size)
+                                      thresholds, block_size=block_size,
+                                      osr_info=osr_info)
             elif r < 0.85:
                 result = crossover_uniform(tournament_select(), tournament_select(),
-                                           edge_to_mask, thresholds)
+                                           edge_to_mask, thresholds,
+                                           osr_info=osr_info)
             else:
                 result = generate_valid_sequence(D, edges, edge_masks, thresholds,
-                                                 edge_to_mask)
+                                                 edge_to_mask, osr_info=osr_info)
 
         if result is not None and result not in seen:
             seen.add(result)
@@ -1033,6 +1180,27 @@ class qgd_SurSearch:
         self.best_circ = None
         config.setdefault('radius_base', config.get('rconstant', 0.5))
 
+        # Compute OSR-based per-cut CNOT lower bounds
+        edges = sorted(set(tuple(e) for e in self.topology))
+        self._osr_edges = edges
+        self._osr_edge_to_idx = {e: i for i, e in enumerate(edges)}
+        self._osr_cuts, self._osr_cut_bounds, self._osr_crossing_edges = \
+            compute_osr_cut_bounds(Umtx, self.N, self.topology)
+        self._osr_D_min = solve_min_D(
+            self._osr_cut_bounds, self._osr_crossing_edges, len(edges))
+        self._osr_info = (self._osr_edge_to_idx, self._osr_crossing_edges,
+                          self._osr_cut_bounds)
+
+        # Log OSR analysis
+        print(f"OSR analysis (N={self.N}):")
+        for cut, bound, crossing in zip(
+                self._osr_cuts, self._osr_cut_bounds,
+                self._osr_crossing_edges):
+            crossing_edges_str = ", ".join(str(edges[i]) for i in crossing)
+            print(f"  Cut {cut}: min_cnots={bound}, "
+                  f"crossing edges: [{crossing_edges_str}]")
+        print(f"  OSR D_min = {self._osr_D_min}")
+
 
     def search_over_D(self, log_file="sursearch_diagnostics.txt"):
 
@@ -1048,6 +1216,13 @@ class qgd_SurSearch:
         _search_t0 = time.time()
 
         circuits = unique_k_sequences(self.topology, self.D)
+        # Filter enumerated circuits against OSR cut bounds
+        n_before_osr = len(circuits)
+        circuits = [c for c in circuits
+                    if check_osr_feasibility(c, *self._osr_info)]
+        if n_before_osr > len(circuits):
+            print(f"OSR pruned {n_before_osr - len(circuits)}/{n_before_osr} "
+                  f"enumerated circuits")
         edges = sorted(set(tuple(e) for e in self.topology))
         acquisition = self.config.get('acquisition', 'LCB')
         tolerance = self.config.get('tolerance', 1e-8)
@@ -1270,11 +1445,13 @@ class qgd_SurSearch:
         _decompose_count = 0
         _search_t0 = time.time()
 
+        osr_info = self._osr_info
+
         # Initial random sample
         X = []
         while len(X) < X0_size:
             seq = generate_valid_sequence(self.D, edges, edge_masks, thresholds,
-                                          edge_to_mask)
+                                          edge_to_mask, osr_info=osr_info)
             if seq is not None and seq not in seen:
                 seen.add(seq)
                 ssk_cache.register(seq)
@@ -1378,7 +1555,8 @@ class qgd_SurSearch:
                 ssk_cache=ssk_cache, gp=gp, scale=scale, kappa=self.kappa,
                 tournament_size=tournament_size, block_size=block_size,
                 local_search_fraction=local_search_fraction,
-                max_local_steps=max_local_steps)
+                max_local_steps=max_local_steps,
+                osr_info=osr_info)
 
             if not candidates:
                 print("Cannot generate new candidates")
@@ -1522,6 +1700,11 @@ class qgd_SurSearch:
         with variable-length SSK kernel. Biased toward lower D via penalty
         term in acquisition to find the most compact solution.
         """
+        # Clamp D_min up to OSR lower bound
+        if D_min < self._osr_D_min:
+            print(f"OSR: clamping D_min from {D_min} to {self._osr_D_min}")
+            D_min = self._osr_D_min
+
         edges = sorted(set(tuple(e) for e in self.topology))
         vertices = {v for edge in edges for v in edge}
         edge_masks = precompute_edge_masks(edges, vertices)
@@ -1543,6 +1726,7 @@ class qgd_SurSearch:
 
         ssk_cache = SSKCache(gap_decay, match_decay, ssk_order)
         seen = set()
+        osr_info = self._osr_info
 
         _decompose_time = 0.0
         _decompose_count = 0
@@ -1555,7 +1739,7 @@ class qgd_SurSearch:
         while len(X) < X0_size and attempts < X0_size * 100:
             D_val = D_range[len(X) % len(D_range)]
             seq = generate_valid_sequence(D_val, edges, edge_masks, thresholds,
-                                          edge_to_mask)
+                                          edge_to_mask, osr_info=osr_info)
             attempts += 1
             if seq is not None and seq not in seen:
                 seen.add(seq)
@@ -1660,7 +1844,7 @@ class qgd_SurSearch:
                 tournament_size=tournament_size, block_size=block_size,
                 local_search_fraction=local_search_fraction,
                 max_local_steps=max_local_steps,
-                D_min=D_min, D_max=D_max)
+                D_min=D_min, D_max=D_max, osr_info=osr_info)
 
             if not candidates:
                 print("Cannot generate new candidates")
@@ -1811,7 +1995,11 @@ class qgd_SurSearch:
         print("Solution not found")
         return best_circ
 
-    def Start_Decomposition(self, D_start, D_end, log_file_prefix="sursearch"):
+    def Start_Decomposition(self, D_start=None, D_end=None, log_file_prefix="sursearch"):
+        if D_start is None:
+            D_start = self._osr_D_min
+        if D_end is None:
+            D_end = self.D
         return self.search_over_D_range(
             D_start, D_end,
             log_file=f"{log_file_prefix}_D{D_start}-{D_end}.txt")
