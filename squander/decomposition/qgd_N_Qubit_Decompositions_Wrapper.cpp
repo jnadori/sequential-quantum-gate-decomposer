@@ -1104,9 +1104,6 @@ qgd_N_Qubit_Decomposition_Wrapper_set_Optimizer(qgd_N_Qubit_Decomposition_Wrappe
     else if (strcmp("posmm", optimizer_C) == 0 || strcmp("POSMM", optimizer_C) == 0) {
         qgd_optimizer = POSMM;
     }
-    else if (strcmp("agents_bfgs", optimizer_C) == 0 || strcmp("AGENTS_BFGS", optimizer_C) == 0) {
-        qgd_optimizer = AGENTS_BFGS;
-    }
     else {
         std::cout << "Wrong optimizer: " << optimizer_C << ". Using default: BFGS" << std::endl;
         qgd_optimizer = BFGS;

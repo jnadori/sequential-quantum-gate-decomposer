@@ -324,8 +324,21 @@ public:
 
     // ---- Circuit evaluation ----
 
+    /// Result of a single decompose() call, used for parallel batching
+    struct DecompResult {
+        double score;
+        Matrix_real params;
+        double elapsed;
+    };
+
     /// Decompose a circuit: build gate structure, optimize with random init, return (score, params)
     std::pair<double, Matrix_real> decompose(const GrayCode& circuit);
+
+    /// Thread-safe decompose variant that takes an external RNG
+    std::pair<double, Matrix_real> decompose_with_rng(const GrayCode& circuit, std::mt19937& local_gen);
+
+    /// Parallel decompose a batch of circuits using TBB (respects 'parallel' config)
+    void parallel_decompose_batch(const std::vector<GrayCode>& circuits, std::vector<DecompResult>& results);
 
     // ---- Gate structure building (following Tree_Search pattern) ----
 

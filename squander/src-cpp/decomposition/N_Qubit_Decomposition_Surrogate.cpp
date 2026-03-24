@@ -29,6 +29,8 @@ limitations under the License.
 #include <iostream>
 #include <limits>
 #include <sstream>
+#include <thread>
+#include "tbb/tbb.h"
 
 
 // ============================================================================
@@ -1799,8 +1801,14 @@ void N_Qubit_Decomposition_Surrogate::add_finalyzing_layer(Gates_block* gate_str
 
 std::pair<double, Matrix_real> N_Qubit_Decomposition_Surrogate::decompose(
     const GrayCode& circuit) {
+    return decompose_with_rng(circuit, gen);
+}
+
+std::pair<double, Matrix_real> N_Qubit_Decomposition_Surrogate::decompose_with_rng(
+    const GrayCode& circuit, std::mt19937& local_gen) {
 
     Gates_block* gate_structure = construct_gate_structure(circuit);
+    int param_num = gate_structure->get_parameter_num();
 
     N_Qubit_Decomposition_custom cDecomp(Umtx.copy(), qbit_num, false, config, RANDOM, accelerator_num);
     cDecomp.set_custom_gate_structure(gate_structure);
@@ -1810,12 +1818,11 @@ std::pair<double, Matrix_real> N_Qubit_Decomposition_Surrogate::decompose(
     cDecomp.set_optimization_tolerance(tolerance);
     cDecomp.set_optimizer(alg);
 
-    int param_num = gate_structure->get_parameter_num();
     // Random initial parameters
     Matrix_real random_params(1, param_num);
     std::uniform_real_distribution<double> param_dist(0.0, 2.0 * M_PI);
     for (int i = 0; i < param_num; ++i)
-        random_params[i] = param_dist(gen);
+        random_params[i] = param_dist(local_gen);
     cDecomp.set_optimized_parameters(random_params.get_data(), param_num);
 
     cDecomp.start_decomposition();
@@ -1824,6 +1831,41 @@ std::pair<double, Matrix_real> N_Qubit_Decomposition_Surrogate::decompose(
     double score = cDecomp.optimization_problem(params);
 
     return {score, params};
+}
+
+void N_Qubit_Decomposition_Surrogate::parallel_decompose_batch(
+    const std::vector<GrayCode>& circuits,
+    std::vector<DecompResult>& results) {
+
+    int n = static_cast<int>(circuits.size());
+    results.resize(n);
+    if (n == 0) return;
+
+    unsigned int nthreads = std::thread::hardware_concurrency();
+    int64_t concurrency = std::min(static_cast<int64_t>(nthreads), static_cast<int64_t>(n));
+    int parallel = get_parallel_configuration();
+    int64_t work_batch = (parallel == 0) ? concurrency : 1;
+
+    tbb::parallel_for(
+        tbb::blocked_range<int64_t>(0, concurrency, work_batch),
+        [&](tbb::blocked_range<int64_t> r) {
+            std::mt19937 local_gen(std::random_device{}());
+
+            for (int64_t job_idx = r.begin(); job_idx < r.end(); ++job_idx) {
+                int64_t batch_sz = n / concurrency;
+                int64_t start = job_idx * batch_sz;
+                int64_t end = (job_idx == concurrency - 1) ? n : start + batch_sz;
+
+                for (int64_t i = start; i < end; ++i) {
+                    auto t0 = std::chrono::high_resolution_clock::now();
+                    auto res = decompose_with_rng(circuits[i], local_gen);
+                    auto t1 = std::chrono::high_resolution_clock::now();
+                    results[i].score = res.first;
+                    results[i].params = res.second;
+                    results[i].elapsed = std::chrono::duration<double>(t1 - t0).count();
+                }
+            }
+        });
 }
 
 
@@ -1921,9 +1963,10 @@ void N_Qubit_Decomposition_Surrogate::search_over_D_range(
             std::sort(prev_indices.begin(), prev_indices.end(),
                       [&](int a, int b) { return y[a] < y[b]; });
 
-            int n_grown = 0;
+            // Phase A: batch-generate grown circuits sequentially
+            std::vector<GrayCode> grow_batch;
             for (int pi : prev_indices) {
-                if (n_grown >= needed) break;
+                if (static_cast<int>(grow_batch.size()) >= needed) break;
                 for (int attempt = 0; attempt < 10; ++attempt) {
                     GrayCode grown = mutate_grow(X[pi], D);
                     if (grown.size() == 0) continue;
@@ -1932,27 +1975,33 @@ void N_Qubit_Decomposition_Surrogate::search_over_D_range(
 
                     seen.insert(grown.copy());
                     ssk_cache.register_circuit(grown);
+                    grow_batch.push_back(std::move(grown));
+                    break;
+                }
+            }
 
-                    auto t0 = std::chrono::high_resolution_clock::now();
-                    auto dec_result = decompose(grown);
-                    auto t1 = std::chrono::high_resolution_clock::now();
-                    decompose_time += std::chrono::duration<double>(t1 - t0).count();
-                    decompose_count++;
+            // Phase B: parallel decompose
+            std::vector<DecompResult> grow_results;
+            parallel_decompose_batch(grow_batch, grow_results);
 
-                    y.push_back(dec_result.first);
-                    all_params.push_back(dec_result.second);
-                    X.push_back(std::move(grown));
-                    n_grown++;
+            // Phase C: sequential state update
+            int n_grown = 0;
+            for (int gi = 0; gi < static_cast<int>(grow_batch.size()); ++gi) {
+                decompose_time += grow_results[gi].elapsed;
+                decompose_count++;
 
-                    if (y.back() < best_score) {
-                        best_score = y.back();
-                        best_circuit = X.back().copy();
-                        best_params = all_params.back();
-                    }
-                    if (y.back() < tolerance) {
-                        early_solution = true;
-                    }
-                    break;  // success for this parent, move to next
+                y.push_back(grow_results[gi].score);
+                all_params.push_back(grow_results[gi].params);
+                X.push_back(std::move(grow_batch[gi]));
+                n_grown++;
+
+                if (y.back() < best_score) {
+                    best_score = y.back();
+                    best_circuit = X.back().copy();
+                    best_params = all_params.back();
+                }
+                if (y.back() < tolerance) {
+                    early_solution = true;
                 }
                 if (early_solution) break;
             }
@@ -2032,9 +2081,11 @@ void N_Qubit_Decomposition_Surrogate::search_over_D_range(
                               [&](int a, int b) { return y[a] < y[b]; });
 
                     int needed = X0_size - existing_at_D;
-                    int n_grown = 0;
+
+                    // Phase A: batch-generate grown circuits sequentially
+                    std::vector<GrayCode> narrow_batch;
                     for (int pi : prev_indices) {
-                        if (n_grown >= needed) break;
+                        if (static_cast<int>(narrow_batch.size()) >= needed) break;
                         for (int attempt = 0; attempt < 10; ++attempt) {
                             GrayCode grown = mutate_grow(X[pi], D_try);
                             if (grown.size() == 0 || static_cast<int>(grown.size()) != D_try) continue;
@@ -2042,23 +2093,28 @@ void N_Qubit_Decomposition_Surrogate::search_over_D_range(
 
                             seen.insert(grown.copy());
                             ssk_cache.register_circuit(grown);
-                            auto t0 = std::chrono::high_resolution_clock::now();
-                            auto dec_result = decompose(grown);
-                            auto t1 = std::chrono::high_resolution_clock::now();
-                            decompose_time += std::chrono::duration<double>(t1 - t0).count();
-                            decompose_count++;
-
-                            y.push_back(dec_result.first);
-                            all_params.push_back(dec_result.second);
-                            X.push_back(std::move(grown));
-                            n_grown++;
-
-                            if (y.back() < best_score) {
-                                best_score = y.back();
-                                best_circuit = X.back().copy();
-                                best_params = all_params.back();
-                            }
+                            narrow_batch.push_back(std::move(grown));
                             break;
+                        }
+                    }
+
+                    // Phase B: parallel decompose
+                    std::vector<DecompResult> narrow_results;
+                    parallel_decompose_batch(narrow_batch, narrow_results);
+
+                    // Phase C: sequential state update
+                    for (int gi = 0; gi < static_cast<int>(narrow_batch.size()); ++gi) {
+                        decompose_time += narrow_results[gi].elapsed;
+                        decompose_count++;
+
+                        y.push_back(narrow_results[gi].score);
+                        all_params.push_back(narrow_results[gi].params);
+                        X.push_back(std::move(narrow_batch[gi]));
+
+                        if (y.back() < best_score) {
+                            best_score = y.back();
+                            best_circuit = X.back().copy();
+                            best_params = all_params.back();
                         }
                     }
                 }
@@ -2220,30 +2276,43 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
         int generated = 0;
         int attempts = 0;
         while (generated < needed && attempts < needed * 100) {
-            double r = uni(gen);
-            int D_val = D_range.back();
-            for (size_t i = 0; i < d_cdf.size(); ++i) {
-                if (r <= d_cdf[i]) { D_val = D_range[i]; break; }
+            // Phase A: batch-generate circuits sequentially
+            int batch_target = std::min(needed - generated,
+                static_cast<int>(std::thread::hardware_concurrency()));
+            std::vector<GrayCode> batch_circuits;
+            batch_circuits.reserve(batch_target);
+
+            while (static_cast<int>(batch_circuits.size()) < batch_target &&
+                   attempts < needed * 100) {
+                double r = uni(gen);
+                int D_val = D_range.back();
+                for (size_t i = 0; i < d_cdf.size(); ++i) {
+                    if (r <= d_cdf[i]) { D_val = D_range[i]; break; }
+                }
+                GrayCode seq = generate_valid_sequence(D_val);
+                attempts++;
+                if (seq.size() > 0 && seen.find(seq) == seen.end()) {
+                    seen.insert(seq.copy());
+                    ssk_cache.register_circuit(seq);
+                    batch_circuits.push_back(std::move(seq));
+                }
             }
 
-            GrayCode seq = generate_valid_sequence(D_val);
-            attempts++;
-            if (seq.size() > 0 && seen.find(seq) == seen.end()) {
-                seen.insert(seq.copy());
-                ssk_cache.register_circuit(seq);
+            if (batch_circuits.empty()) continue;
 
-                auto t0 = std::chrono::high_resolution_clock::now();
-                std::pair<double, Matrix_real> dec_result = decompose(seq);
-                auto t1 = std::chrono::high_resolution_clock::now();
-                decompose_time += std::chrono::duration<double>(t1 - t0).count();
+            // Phase B: parallel decompose
+            std::vector<DecompResult> batch_results;
+            parallel_decompose_batch(batch_circuits, batch_results);
+
+            // Phase C: sequential state update
+            for (int bi = 0; bi < static_cast<int>(batch_circuits.size()); ++bi) {
+                decompose_time += batch_results[bi].elapsed;
                 decompose_count++;
-
-                y.push_back(dec_result.first);
-                all_params.push_back(dec_result.second);
-                X.push_back(std::move(seq));
+                y.push_back(batch_results[bi].score);
+                all_params.push_back(batch_results[bi].params);
+                X.push_back(std::move(batch_circuits[bi]));
                 generated++;
 
-                // Update global best
                 double score = y.back();
                 if (score < best_score) {
                     best_score = score;
@@ -2649,24 +2718,27 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
             t_acq = std::chrono::duration<double>(t_phase1 - t_phase0).count();
         } // end if/else use_random_candidates
 
-        // --- Decompose phase (shared) ---
+        // --- Decompose phase (shared, parallelized) ---
         auto t_phase0 = std::chrono::high_resolution_clock::now();
 
-        // Evaluate selected candidates
         int n_sel = static_cast<int>(selected_indices.size());
-
         bool improved_this_iter = false;
         bool found_solution = false;
 
+        // Phase A: parallel decompose
+        std::vector<GrayCode> sel_circuits(n_sel);
+        for (int si = 0; si < n_sel; ++si)
+            sel_circuits[si] = candidates[selected_indices[si]].copy();
+
+        std::vector<DecompResult> dec_results;
+        parallel_decompose_batch(sel_circuits, dec_results);
+
+        // Phase B: sequential state update
         for (int si = 0; si < n_sel; ++si) {
             int sel_idx = selected_indices[si];
-
-            auto t0 = std::chrono::high_resolution_clock::now();
-            std::pair<double, Matrix_real> new_result = decompose(candidates[sel_idx]);
-            double new_score = new_result.first;
-            Matrix_real new_params = new_result.second;
-            auto t1 = std::chrono::high_resolution_clock::now();
-            decompose_time += std::chrono::duration<double>(t1 - t0).count();
+            double new_score = dec_results[si].score;
+            Matrix_real new_params = dec_results[si].params;
+            decompose_time += dec_results[si].elapsed;
             decompose_count++;
 
             ssk_cache.register_circuit(candidates[sel_idx]);

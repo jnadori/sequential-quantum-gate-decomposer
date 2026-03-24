@@ -726,7 +726,6 @@ list(APPEND qgd_files
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/optimization_engines/ADAM_BATCHED.cpp    
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/optimization_engines/ADAM.cpp
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/optimization_engines/AGENTS.cpp
-    ${PROJECT_SOURCE_DIR}/squander/src-cpp/optimization_engines/AGENTS_BFGS.cpp
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/optimization_engines/BAYES_OPT.cpp
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/optimization_engines/BAYES_AGENTS.cpp
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/optimization_engines/BFGS.cpp
