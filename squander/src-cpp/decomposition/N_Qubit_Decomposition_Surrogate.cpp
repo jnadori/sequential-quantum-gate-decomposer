@@ -1680,21 +1680,53 @@ void N_Qubit_Decomposition_Surrogate::generate_candidates(
         return population[best_idx];
     };
 
-    // GP-directed local search candidates
+    // GP-directed local search candidates (parallelized)
     int n_local_found = 0;
     int total_local_steps = 0;
     int n_local_target = static_cast<int>(n_candidates * local_search_fraction);
-    for (int i = 0; i < n_local_target; ++i) {
-        const GrayCode& parent = tournament_select();
-        int steps = 0;
-        GrayCode result = local_search_acq(parent, cache, gp, scale, seen,
-                                           D_min_gen, D_max_gen, &steps);
-        total_local_steps += steps;
-        if (result.size() > 0 && seen.find(result) == seen.end() &&
-            (D_max_gen < 0 || static_cast<int>(result.size()) <= D_max_gen)) {
-            seen.insert(result.copy());
-            candidates_out.push_back(std::move(result));
-            n_local_found++;
+
+    if (n_local_target > 0) {
+        // Phase A: pre-select parents sequentially (uses gen)
+        std::vector<GrayCode> local_parents(n_local_target);
+        for (int i = 0; i < n_local_target; ++i)
+            local_parents[i] = tournament_select().copy();
+
+        // Phase B: run local searches in parallel
+        // local_search_acq is read-only on cache, gp, and seen
+        std::vector<GrayCode> local_results(n_local_target);
+        std::vector<int> local_steps(n_local_target, 0);
+
+        unsigned int nthreads = std::thread::hardware_concurrency();
+        int64_t concurrency = std::min(static_cast<int64_t>(nthreads),
+                                       static_cast<int64_t>(n_local_target));
+        int parallel = get_parallel_configuration();
+        int64_t work_batch = (parallel == 0) ? concurrency : 1;
+
+        tbb::parallel_for(
+            tbb::blocked_range<int64_t>(0, concurrency, work_batch),
+            [&](tbb::blocked_range<int64_t> r) {
+                for (int64_t job_idx = r.begin(); job_idx < r.end(); ++job_idx) {
+                    int64_t batch_sz = n_local_target / concurrency;
+                    int64_t start = job_idx * batch_sz;
+                    int64_t end = (job_idx == concurrency - 1) ? n_local_target : start + batch_sz;
+
+                    for (int64_t i = start; i < end; ++i) {
+                        local_results[i] = local_search_acq(
+                            local_parents[i], cache, gp, scale, seen,
+                            D_min_gen, D_max_gen, &local_steps[i]);
+                    }
+                }
+            });
+
+        // Phase C: sequential dedup and insert
+        for (int i = 0; i < n_local_target; ++i) {
+            total_local_steps += local_steps[i];
+            if (local_results[i].size() > 0 && seen.find(local_results[i]) == seen.end() &&
+                (D_max_gen < 0 || static_cast<int>(local_results[i].size()) <= D_max_gen)) {
+                seen.insert(local_results[i].copy());
+                candidates_out.push_back(std::move(local_results[i]));
+                n_local_found++;
+            }
         }
     }
 
@@ -2058,8 +2090,8 @@ void N_Qubit_Decomposition_Surrogate::search_over_D_range(
             local_search_fraction = rb_local_search_fraction;
             max_local_steps = rb_max_local_steps;
 
-            // Try to find shorter circuits by searching D_found-1 down to D_min + 1 (since it wouldve found a solution at D_min in the last iter probably.), one D at a time
-            for (int D_try = D_found - 1; D_try >= D_min_search + 1; --D_try) {
+            // Try to find shorter circuits by searching D_found-1 down to win_lo + 1 (since it wouldve found a solution at D_min in the last iter probably.), one D at a time
+            for (int D_try = D_found - 1; D_try >= win_lo + 1; --D_try) {
                 {
                     std::ofstream flog(log_file, std::ios::app);
                     flog << "Narrowing: solution at D=" << D_found

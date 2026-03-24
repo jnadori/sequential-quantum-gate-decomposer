@@ -1,9 +1,6 @@
 """Compile QASM circuits from circs/ using C++ N_Qubit_Decomposition_Surrogate."""
 
 import os
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("MKL_NUM_THREADS", "1")
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 import csv
 import glob
@@ -22,7 +19,7 @@ TOLERANCE = 1e-8
 OPTIMIZER_CONFIG_BH = {
     # Local optimizer + basin hopping
     'optimizer': 'BFGS2',
-    'parallel': 0,
+    'parallel': 2,
     'tolerance': TOLERANCE,
     'use_basin_hopping': 1,
     'bh_T': 1.1375279022671254,
@@ -40,7 +37,7 @@ OPTIMIZER_CONFIG_BH = {
     'window_patience': 20,          # iterations without >1% improvement before moving to next D
     'window_max_iters': 80,         # hard cap on iterations per window
     'd_window_width': 2,            # search 2 adjacent D values per window
-    'max_consecutive_stagnations': 3, # skip ahead after 3 fruitless windows
+    'max_consecutive_stagnations': 5, # skip ahead after 3 fruitless windows
     'gp_max_train': 500,            # max GP training points (sparse subset selection)
     'topk_diversity_threshold': 0.95, # Thompson sampling diversity filter
     # SSK kernel params
@@ -60,7 +57,7 @@ OPTIMIZER_CONFIG_BH = {
 OPTIMIZER_CONFIG_POSMM = {
     # Local optimizer + basin hopping
     'optimizer': 'POSMM',
-    'parallel': 0,
+    'parallel': 2,
     'tolerance': TOLERANCE,
     'worker_num': 5,
     'max_iteration_loops_posmm':5,
@@ -137,8 +134,9 @@ def main():
 
         config = dict(OPTIMIZER_CONFIG)
         config['level_limit'] = two_qbit_original
-        config['parallel'] = 0
+        config['parallel'] = 2
         decomp = N_Qubit_Decomposition_Surrogate(Umtx.conj().T, config=config)
+        decomp.set_Verbose(0)
         decomp.set_Optimizer(config['optimizer'])
         decomp.set_Cost_Function_Variant(3)
         decomp.set_Project_Name(os.path.splitext(name)[0]+'_'+config['optimizer'])
