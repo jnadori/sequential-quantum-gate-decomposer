@@ -26,6 +26,7 @@
 #include "N_Qubit_Decomposition_adaptive.h"
 #include "N_Qubit_Decomposition_Tree_Search.h"
 #include "N_Qubit_Decomposition_Tabu_Search.h"
+#include "N_Qubit_Decomposition_Surrogate.h"
 #include "Gates_block.h"
 
 /**
@@ -318,6 +319,11 @@ qgd_N_Qubit_Decomposition_Tabu_Search_Wrapper_init(qgd_N_Qubit_Decomposition_Wra
     return search_wrapper_init<N_Qubit_Decomposition_Tabu_Search>(self, args, kwds);
 }
 
+static int
+qgd_N_Qubit_Decomposition_Surrogate_Wrapper_init(qgd_N_Qubit_Decomposition_Wrapper* self, PyObject* args, PyObject* kwds) {
+    return search_wrapper_init<N_Qubit_Decomposition_Surrogate>(self, args, kwds);
+}
+
 /**
  * @brief Deallocate decomposition instance
  */
@@ -394,6 +400,10 @@ qgd_N_Qubit_Decomposition_Wrapper_Start_Decomposition(qgd_N_Qubit_Decomposition_
         return Py_BuildValue("i", 0);
     }
     if (N_Qubit_Decomposition_Tabu_Search* p = dynamic_cast<N_Qubit_Decomposition_Tabu_Search*>(self->decomp)) {
+        p->start_decomposition();
+        return Py_BuildValue("i", 0);
+    }
+    if (N_Qubit_Decomposition_Surrogate* p = dynamic_cast<N_Qubit_Decomposition_Surrogate*>(self->decomp)) {
         p->start_decomposition();
         return Py_BuildValue("i", 0);
     }
@@ -2062,6 +2072,10 @@ qgd_N_Qubit_Decomposition_Wrapper_set_Unitary(qgd_N_Qubit_Decomposition_Wrapper 
         p->set_unitary(Umtx_mtx);
         return Py_BuildValue("i", 0);
     }
+    if (N_Qubit_Decomposition_Surrogate* p = dynamic_cast<N_Qubit_Decomposition_Surrogate*>(self->decomp)) {
+        p->set_unitary(Umtx_mtx);
+        return Py_BuildValue("i", 0);
+    }
 
     PyErr_SetString(PyExc_TypeError, "set_unitary not available for this decomposition type");
     return NULL;
@@ -3053,6 +3067,16 @@ static PyMethodDef qgd_N_Qubit_Decomposition_Tree_Search_methods[] = {
     {NULL}
 };
 
+/**
+@brief Method table for N_Qubit_Decomposition_Surrogate
+*/
+static PyMethodDef qgd_N_Qubit_Decomposition_Surrogate_methods[] = {
+    DECOMPOSITION_WRAPPER_BASE_METHODS
+    {"set_Unitary", (PyCFunction) qgd_N_Qubit_Decomposition_Wrapper_set_Unitary, METH_VARARGS,
+     "Call to set unitary matrix"},
+    {NULL}
+};
+
 #define decomposition_wrapper_type_template(decomp_class) \
 static PyTypeObject qgd_##decomp_class##_Wrapper_Type = { \
     PyVarObject_HEAD_INIT(NULL, 0) \
@@ -3111,6 +3135,7 @@ decomposition_wrapper_type_template(N_Qubit_Decomposition_adaptive)
 decomposition_wrapper_type_template(N_Qubit_Decomposition_custom)
 decomposition_wrapper_type_template(N_Qubit_Decomposition_Tree_Search)
 decomposition_wrapper_type_template(N_Qubit_Decomposition_Tabu_Search)
+decomposition_wrapper_type_template(N_Qubit_Decomposition_Surrogate)
 
 //////////////////////////////////////////////////////////////////
 
@@ -3152,7 +3177,8 @@ PyInit_qgd_N_Qubit_Decompositions_Wrapper(void)
         PyType_Ready(&qgd_N_Qubit_Decomposition_adaptive_Wrapper_Type) < 0 ||
         PyType_Ready(&qgd_N_Qubit_Decomposition_custom_Wrapper_Type) < 0 ||
         PyType_Ready(&qgd_N_Qubit_Decomposition_Tree_Search_Wrapper_Type) < 0 ||
-        PyType_Ready(&qgd_N_Qubit_Decomposition_Tabu_Search_Wrapper_Type) < 0) {
+        PyType_Ready(&qgd_N_Qubit_Decomposition_Tabu_Search_Wrapper_Type) < 0 ||
+        PyType_Ready(&qgd_N_Qubit_Decomposition_Surrogate_Wrapper_Type) < 0) {
         return NULL;
     }
 
@@ -3165,6 +3191,7 @@ PyInit_qgd_N_Qubit_Decompositions_Wrapper(void)
     Py_INCREF_template(N_Qubit_Decomposition_custom);
     Py_INCREF_template(N_Qubit_Decomposition_Tree_Search);
     Py_INCREF_template(N_Qubit_Decomposition_Tabu_Search);
+    Py_INCREF_template(N_Qubit_Decomposition_Surrogate);
 
     return m;
 }

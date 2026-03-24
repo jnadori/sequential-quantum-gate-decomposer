@@ -1,4 +1,4 @@
-"""Compile QASM circuits from circs/ using SurSearch Start_Decomposition."""
+"""Compile QASM circuits from circs/ using C++ N_Qubit_Decomposition_Surrogate."""
 
 import os
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -8,30 +8,90 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 import csv
 import glob
 import os
-import sys
 import time
 
 import numpy as np
 from qiskit import QuantumCircuit
-from squander import utils
-from SurSearch import qgd_SurSearch
+from squander import N_Qubit_Decomposition_Surrogate, utils
 
 CIRCS_DIR = "circs"
 RESULTS_CSV = "compilation_results.csv"
 TOLERANCE = 1e-8
 
 
-OPTIMIZER_CONFIG = {
+OPTIMIZER_CONFIG_BH = {
+    # Local optimizer + basin hopping
     'optimizer': 'BFGS2',
     'parallel': 0,
     'tolerance': TOLERANCE,
-    'acquisition': 'LCB',
-    'use_basin_hopping': 1, 'bh_T': 1.1375279022671254, 'bh_stepsize': 0.9200273804590016, 'bh_interval': 94, 'bh_target_accept_rate': 0.5661497388955112, 'bh_stepwise_factor': 0.5557762288919466
+    'use_basin_hopping': 1,
+    'bh_T': 1.1375279022671254,
+    'bh_stepsize': 0.9200273804590016,
+    'bh_interval': 94,
+    'bh_target_accept_rate': 0.5661497388955112,
+    'bh_stepwise_factor': 0.5557762288919466,
+    # Surrogate search params
+    'kappa': 0.5,                   # LCB exploration weight
+    'X0_size': 40,                  # initial random samples per D level
+    'candidates_per_iter': 250,     # candidates generated per iteration
+    'n_thompson_samples': 15,       # candidates evaluated per iteration
+    'local_search_fraction': 0.5,   # fraction of candidates refined by local search
+    'max_local_steps': 30,          # local search steps per candidate
+    'window_patience': 20,          # iterations without >1% improvement before moving to next D
+    'window_max_iters': 80,         # hard cap on iterations per window
+    'd_window_width': 2,            # search 2 adjacent D values per window
+    'max_consecutive_stagnations': 3, # skip ahead after 3 fruitless windows
+    'gp_max_train': 500,            # max GP training points (sparse subset selection)
+    'topk_diversity_threshold': 0.95, # Thompson sampling diversity filter
+    # SSK kernel params
+    'ssk_gap_decay': 0.8,
+    'ssk_match_decay': 0.8,
+    'ssk_order': 3,
+    # Rollback config (more patient, fine-grained)
+    'rb_kappa': 0.3,
+    'rb_window_patience': 50,
+    'rb_window_max_iters': 160,
+    'rb_candidates_per_iter': 250,
+    'rb_n_thompson_samples': 20,
+    'rb_local_search_fraction': 0.85,
+    'rb_max_local_steps': 75,
 }
 
+OPTIMIZER_CONFIG_POSMM = {
+    # Local optimizer + basin hopping
+    'optimizer': 'POSMM',
+    'parallel': 0,
+    'tolerance': TOLERANCE,
+    'worker_num': 5,
+    'max_iteration_loops_posmm':5,
+    # Surrogate search params
+    'kappa': 0.5,                   # LCB exploration weight
+    'X0_size': 15,                  # initial random samples per D level
+    'candidates_per_iter': 250,     # candidates generated per iteration
+    'n_thompson_samples': 20,       # candidates evaluated per iteration
+    'local_search_fraction': 0.75,   # fraction of candidates refined by local search
+    'max_local_steps': 50,          # local search steps per candidate
+    'window_patience': 25,          # iterations without >1% improvement before moving to next D
+    'window_max_iters': 80,         # hard cap on iterations per window
+    'd_window_width': 2,            # search 2 adjacent D values per window
+    'max_consecutive_stagnations': 3, # skip ahead after 3 fruitless windows
+    'gp_max_train': 1000,            # max GP training points (sparse subset selection)
+    'topk_diversity_threshold': 0.95, # Thompson sampling diversity filter
+    # SSK kernel params
+    'ssk_gap_decay': 0.8,
+    'ssk_match_decay': 0.8,
+    'ssk_order': 3,
+    # Rollback config (more patient, fine-grained)
+    'rb_kappa': 0.3,
+    'rb_window_patience': 50,
+    'rb_window_max_iters': 160,
+    'rb_candidates_per_iter': 250,
+    'rb_n_thompson_samples': 20,
+    'rb_local_search_fraction': 0.85,
+    'rb_max_local_steps': 75,
+}
 
-def x0_size_for_d(D):
-    return 20 if D > 7 else 5
+OPTIMIZER_CONFIG = OPTIMIZER_CONFIG_BH
 
 
 TWO_QUBIT_GATES = {'CNOT', 'CZ', 'CH', 'CU', 'CP', 'CR', 'CRX', 'CRY', 'CRZ',
@@ -70,49 +130,25 @@ def main():
         print(f"{'='*60}")
 
         two_qbit_original = count_two_qubit_gates(qasm_file)
-        D_START = max(5,two_qbit_original//2+1)
         Umtx = get_unitary(qasm_file)
         N = int(np.log2(Umtx.shape[0]))
 
         print(f"  Qubits: {N}, Original 2-qubit gates: {two_qbit_original}")
 
-        if two_qbit_original < D_START:
-            print(f"  Skipping: original 2-qubit gate count ({two_qbit_original}) < D_START ({D_START})")
-            with open(RESULTS_CSV, 'a', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow([name, N, two_qbit_original, two_qbit_original, 0.0, 0.0])
-            continue
-
         config = dict(OPTIMIZER_CONFIG)
-        searcher = qgd_SurSearch(Umtx, config, D_START)
+        config['level_limit'] = two_qbit_original
+        config['parallel'] = 0
+        decomp = N_Qubit_Decomposition_Surrogate(Umtx.conj().T, config=config)
+        decomp.set_Optimizer(config['optimizer'])
+        decomp.set_Cost_Function_Variant(3)
+        decomp.set_Project_Name(os.path.splitext(name)[0]+'_'+config['optimizer'])
 
         t0 = time.time()
-        real_stdout = sys.stdout
-        sys.stdout = open(os.devnull, 'w')
-        try:
-            for D in range(D_START, two_qbit_original + 1):
-                config['X0_size'] = x0_size_for_d(D)
-                searcher.D = D
-                searcher.search_over_D(log_file=f"sursearch_logs/{name}_D{D}.txt")
-                dec_t = getattr(searcher, '_decompose_time', 0.0)
-                dec_n = getattr(searcher, '_decompose_count', 0)
-                tot_t = getattr(searcher, '_total_search_time', 0.0)
-                py_t = tot_t - dec_t
-                print(f"  D={D}: best_score={searcher.best_score:.6e}  "
-                      f"decompositions={dec_n}  "
-                      f"decompose_time={dec_t:.1f}s  "
-                      f"python/GP_time={py_t:.1f}s  "
-                      f"total={tot_t:.1f}s",
-                      file=real_stdout, flush=True)
-                if searcher.best_score < TOLERANCE:
-                    break
-        finally:
-            sys.stdout.close()
-            sys.stdout = real_stdout
+        decomp.Start_Decomposition()
         elapsed = time.time() - t0
 
-        best_score = searcher.best_score
-        two_qbit_compiled = len(searcher.best_circ) if searcher.best_circ is not None else two_qbit_original
+        best_score = decomp.get_Decomposition_Error()
+        two_qbit_compiled = decomp.get_Gate_Num() - 1  # blocks minus finalizing layer
 
         print(f"  Compiled 2-qubit gates: {two_qbit_compiled}, Error: {best_score:.2e}, Time: {elapsed:.1f}s")
 

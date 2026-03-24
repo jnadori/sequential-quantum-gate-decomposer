@@ -213,6 +213,15 @@ get_Limits() const {
 
 }
 
+/**
+@brief Call to get a const reference to the n-ary limits (no allocation).
+@return Returns a const reference to the internal n_ary_limits.
+*/
+const matrix_base<intType>&
+get_Limits_ref() const {
+    return n_ary_limits;
+}
+
 
 
 /**

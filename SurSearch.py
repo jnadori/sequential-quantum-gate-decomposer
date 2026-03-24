@@ -409,7 +409,7 @@ def _local_search_acq(start_seq, edges, edge_to_mask, thresholds,
 
     # Evaluate LCB for starting point
     Ks_cur = ssk_cache.compute_cross_kernel([current], scale)
-    mu_cur = float(Ks_cur.T @ gp.alpha)
+    mu_cur = float((Ks_cur.T @ gp.alpha).ravel()[0])
     v_cur = np.linalg.solve(gp.L, Ks_cur)
     std_cur = np.sqrt(max(scale - float(np.sum(v_cur * v_cur)), 0.0))
     best_lcb = mu_cur - kappa * std_cur
@@ -486,19 +486,33 @@ def _generate_candidates(population, scores, n_candidates, edges, edge_masks,
                          D_min=None, D_max=None, osr_info=None):
     candidates = []
     n_pop = len(population)
-    t_size = min(tournament_size, n_pop)
+
+    # When D_max is set, restrict tournament selection to parents with D <= D_max
+    if D_max is not None:
+        valid_mask = np.array([len(p) <= D_max for p in population])
+        valid_indices = np.where(valid_mask)[0]
+        if len(valid_indices) > 0:
+            pop_indices = valid_indices
+        else:
+            pop_indices = np.arange(n_pop)
+    else:
+        pop_indices = np.arange(n_pop)
+
+    n_valid = len(pop_indices)
+    t_size = min(tournament_size, n_valid)
 
     # Pre-generate random numbers in bulk
     max_total_attempts = n_candidates * 10
     op_probs = np.random.random(max_total_attempts)
-    tour_indices = np.random.randint(0, n_pop, size=(max_total_attempts * 2, t_size))
+    tour_indices = np.random.randint(0, n_valid, size=(max_total_attempts * 2, t_size))
     tour_idx = 0
 
     def tournament_select():
         nonlocal tour_idx
-        indices = tour_indices[tour_idx]
+        rel_indices = tour_indices[tour_idx]
         tour_idx += 1
-        best_idx = indices[np.argmin(scores[indices])]
+        abs_indices = pop_indices[rel_indices]
+        best_idx = abs_indices[np.argmin(scores[abs_indices])]
         return population[best_idx]
 
     # GP-directed local search candidates
@@ -514,7 +528,8 @@ def _generate_candidates(population, scores, n_candidates, edges, edge_masks,
                 max_steps=max_local_steps, seen=seen,
                 D_min=D_min, D_max=D_max, osr_info=osr_info)
             total_local_steps += steps
-            if result is not None and result not in seen:
+            if (result is not None and result not in seen
+                    and (D_max is None or len(result) <= D_max)):
                 seen.add(result)
                 candidates.append(result)
                 n_local_found += 1
@@ -547,14 +562,16 @@ def _generate_candidates(population, scores, n_candidates, edges, edge_masks,
                 else:
                     result = mutate_point(p1, edges, edge_to_mask, thresholds,
                                           osr_info=osr_info)
-            elif r < 0.80:
+            elif r < 0.75:
                 result = mutate_grow(tournament_select(), edges, edge_to_mask,
                                      thresholds, D_max, osr_info=osr_info)
             elif r < 0.90:
                 result = mutate_shrink(tournament_select(), edge_to_mask,
                                        thresholds, D_min, osr_info=osr_info)
             else:
-                rand_D = np.random.randint(D_min, D_max + 1)
+                # Bias random generation toward lower D
+                rand_D = D_min + min(
+                    int(np.random.geometric(0.4)), D_max - D_min)
                 result = generate_valid_sequence(rand_D, edges, edge_masks,
                                                   thresholds, edge_to_mask,
                                                   osr_info=osr_info)
@@ -578,7 +595,8 @@ def _generate_candidates(population, scores, n_candidates, edges, edge_masks,
                 result = generate_valid_sequence(D, edges, edge_masks, thresholds,
                                                  edge_to_mask, osr_info=osr_info)
 
-        if result is not None and result not in seen:
+        if (result is not None and result not in seen
+                and (not mixed_d or len(result) <= D_max)):
             seen.add(result)
             candidates.append(result)
 
@@ -1191,15 +1209,6 @@ class qgd_SurSearch:
         self._osr_info = (self._osr_edge_to_idx, self._osr_crossing_edges,
                           self._osr_cut_bounds)
 
-        # Log OSR analysis
-        print(f"OSR analysis (N={self.N}):")
-        for cut, bound, crossing in zip(
-                self._osr_cuts, self._osr_cut_bounds,
-                self._osr_crossing_edges):
-            crossing_edges_str = ", ".join(str(edges[i]) for i in crossing)
-            print(f"  Cut {cut}: min_cnots={bound}, "
-                  f"crossing edges: [{crossing_edges_str}]")
-        print(f"  OSR D_min = {self._osr_D_min}")
 
 
     def search_over_D(self, log_file="sursearch_diagnostics.txt"):
@@ -1220,9 +1229,6 @@ class qgd_SurSearch:
         n_before_osr = len(circuits)
         circuits = [c for c in circuits
                     if check_osr_feasibility(c, *self._osr_info)]
-        if n_before_osr > len(circuits):
-            print(f"OSR pruned {n_before_osr - len(circuits)}/{n_before_osr} "
-                  f"enumerated circuits")
         edges = sorted(set(tuple(e) for e in self.topology))
         acquisition = self.config.get('acquisition', 'LCB')
         tolerance = self.config.get('tolerance', 1e-8)
@@ -1286,7 +1292,6 @@ class qgd_SurSearch:
             f.write("-" * 70 + "\n")
 
         if best_score < tolerance:
-            print("Success at random selection")
             with open(log_file, 'a') as f:
                 f.write("Success at random selection\n")
             self.best_score = best_score
@@ -1375,14 +1380,11 @@ class qgd_SurSearch:
                 f"  y stats: min={np.min(y):.4f}, mean={np.mean(y):.4f}, "
                 f"std={np.std(y):.4f}",
             ]
-            for line in lines:
-                print(line)
             with open(log_file, 'a') as f:
                 f.write("\n".join(lines) + "\n")
 
             if new_score < tolerance:
                 msg = f"Success at iteration: {itr}"
-                print(msg)
                 with open(log_file, 'a') as f:
                     f.write(msg + "\n")
                 self.best_score = new_score
@@ -1395,7 +1397,6 @@ class qgd_SurSearch:
 
             if iters_since_improvement >= patience:
                 msg = f"Stagnation exit at iteration {itr} (no improvement for {patience} iters)"
-                print(msg)
                 with open(log_file, 'a') as f:
                     f.write(msg + "\n")
                 break
@@ -1409,7 +1410,6 @@ class qgd_SurSearch:
         self._decompose_time = _decompose_time
         self._decompose_count = _decompose_count
         self._total_search_time = time.time() - _search_t0
-        print("Solution not found")
         return best_circ
 
     def search_over_D_evolve(self, log_file="sursearch_diagnostics.txt"):
@@ -1479,7 +1479,6 @@ class qgd_SurSearch:
             f.write("-" * 70 + "\n")
 
         if best_score < tolerance:
-            print("Success at random selection")
             with open(log_file, 'a') as f:
                 f.write("Success at random selection\n")
             self.best_score = best_score
@@ -1559,7 +1558,6 @@ class qgd_SurSearch:
                 osr_info=osr_info)
 
             if not candidates:
-                print("Cannot generate new candidates")
                 break
 
             # 3. Screen all candidates with GP
@@ -1576,7 +1574,8 @@ class qgd_SurSearch:
             # Posterior covariance at candidate points
             n_cand = len(candidates)
             K_cand = scale * ssk_gram_matrix(
-                candidates, gap_decay, match_decay, ssk_order)
+                candidates, gap_decay, match_decay, ssk_order,
+                )
             cov_post = K_cand - v.T @ v
 
             # Cholesky with jitter for numerical stability
@@ -1642,7 +1641,6 @@ class qgd_SurSearch:
 
                 if new_score < tolerance:
                     msg = f"Success at iteration: {itr}"
-                    print(msg)
                     with open(log_file, 'a') as f:
                         f.write(msg + "\n")
                     self.best_score = new_score
@@ -1672,14 +1670,11 @@ class qgd_SurSearch:
                 f"avg {avg_local_steps:.1f} steps, "
                 f"{selected_from_local}/{len(selected_indices)} selected",
             ]
-            for line in lines:
-                print(line)
             with open(log_file, 'a') as f:
                 f.write("\n".join(lines) + "\n")
 
             if iters_since_improvement >= patience:
                 msg = f"Stagnation exit at iteration {itr} (no improvement for {patience} iters)"
-                print(msg)
                 with open(log_file, 'a') as f:
                     f.write(msg + "\n")
                 break
@@ -1690,7 +1685,6 @@ class qgd_SurSearch:
         self._decompose_time = _decompose_time
         self._decompose_count = _decompose_count
         self._total_search_time = time.time() - _search_t0
-        print("Solution not found")
         return best_circ
 
     def search_over_D_range(self, D_min, D_max, log_file="sursearch_cross_d.txt"):
@@ -1702,7 +1696,6 @@ class qgd_SurSearch:
         """
         # Clamp D_min up to OSR lower bound
         if D_min < self._osr_D_min:
-            print(f"OSR: clamping D_min from {D_min} to {self._osr_D_min}")
             D_min = self._osr_D_min
 
         edges = sorted(set(tuple(e) for e in self.topology))
@@ -1722,7 +1715,7 @@ class qgd_SurSearch:
         gap_decay = self.config.get('ssk_gap_decay', 0.8)
         match_decay = self.config.get('ssk_match_decay', 0.8)
         ssk_order = self.config.get('ssk_order', 3)
-        d_penalty = self.config.get('d_penalty', 0.1)
+        d_penalty = self.config.get('d_penalty', 0.3)
 
         ssk_cache = SSKCache(gap_decay, match_decay, ssk_order)
         seen = set()
@@ -1732,12 +1725,16 @@ class qgd_SurSearch:
         _decompose_count = 0
         _search_t0 = time.time()
 
-        # Initial random sample — round-robin across D values
+        effective_D_max = D_max
+
+        # Initial random sample — biased toward lower D values
         X = []
-        D_range = list(range(D_min, D_max + 1))
+        D_range = list(range(D_min, effective_D_max + 1))
+        d_weights = np.array([1.0 / d for d in D_range])
+        d_weights /= d_weights.sum()
         attempts = 0
         while len(X) < X0_size and attempts < X0_size * 100:
-            D_val = D_range[len(X) % len(D_range)]
+            D_val = int(np.random.choice(D_range, p=d_weights))
             seq = generate_valid_sequence(D_val, edges, edge_masks, thresholds,
                                           edge_to_mask, osr_info=osr_info)
             attempts += 1
@@ -1768,16 +1765,20 @@ class qgd_SurSearch:
             f.write("-" * 70 + "\n")
 
         if best_score < tolerance:
-            print(f"Success at random selection (D={len(best_circ)})")
+            D_found = len(best_circ)
+            effective_D_max = D_found - 1
+            msg = (f"Success at random selection (D={D_found}), "
+                   f"narrowing to D={D_min}-{effective_D_max}")
             with open(log_file, 'a') as f:
-                f.write(f"Success at random selection (D={len(best_circ)})\n")
-            self.best_score = best_score
-            self.best_params = best_params
-            self.best_circ = best_circ
-            self._decompose_time = _decompose_time
-            self._decompose_count = _decompose_count
-            self._total_search_time = time.time() - _search_t0
-            return best_circ
+                f.write(msg + "\n")
+            if effective_D_max < D_min:
+                self.best_score = best_score
+                self.best_params = best_params
+                self.best_circ = best_circ
+                self._decompose_time = _decompose_time
+                self._decompose_count = _decompose_count
+                self._total_search_time = time.time() - _search_t0
+                return best_circ
 
         # GP setup (SSK kernel — single hyperparameter: log_scale)
         gp_kernel_params = np.array([0.0])
@@ -1844,10 +1845,9 @@ class qgd_SurSearch:
                 tournament_size=tournament_size, block_size=block_size,
                 local_search_fraction=local_search_fraction,
                 max_local_steps=max_local_steps,
-                D_min=D_min, D_max=D_max, osr_info=osr_info)
+                D_min=D_min, D_max=effective_D_max, osr_info=osr_info)
 
             if not candidates:
-                print("Cannot generate new candidates")
                 break
 
             # 3. Screen candidates with GP
@@ -1863,7 +1863,8 @@ class qgd_SurSearch:
 
             n_cand = len(candidates)
             K_cand = scale * ssk_gram_matrix(
-                candidates, gap_decay, match_decay, ssk_order)
+                candidates, gap_decay, match_decay, ssk_order,
+                )
             cov_post = K_cand - v.T @ v
 
             jitter = 1e-6
@@ -1925,7 +1926,10 @@ class qgd_SurSearch:
                 y = np.append(y, new_score)
                 X.append(candidates[sel_idx])
 
-                if new_score < best_score:
+                # Prefer lower D when both are below tolerance
+                if (new_score < best_score or
+                        (new_score < tolerance and
+                         len(candidates[sel_idx]) < len(best_circ))):
                     best_score = new_score
                     best_circ = candidates[sel_idx]
                     best_params = new_params
@@ -1933,17 +1937,20 @@ class qgd_SurSearch:
 
                 if new_score < tolerance:
                     D_found = len(candidates[sel_idx])
-                    msg = f"Success at iteration: {itr} (D={D_found})"
-                    print(msg)
+                    effective_D_max = D_found - 1
+                    msg = (f"Success at iteration {itr} (D={D_found}), "
+                           f"narrowing to D={D_min}-{effective_D_max}")
                     with open(log_file, 'a') as f:
                         f.write(msg + "\n")
-                    self.best_score = new_score
-                    self.best_params = new_params
-                    self.best_circ = candidates[sel_idx]
-                    self._decompose_time = _decompose_time
-                    self._decompose_count = _decompose_count
-                    self._total_search_time = time.time() - _search_t0
-                    return candidates[sel_idx]
+                    iters_since_improvement = 0
+                    break  # break inner loop, continue searching lower D
+
+            # Check if search range is exhausted
+            if effective_D_max < D_min:
+                msg = f"Optimal D={len(best_circ)} found (no lower D possible)"
+                with open(log_file, 'a') as f:
+                    f.write(msg + "\n")
+                break
 
             if improved_this_iter:
                 iters_since_improvement = 0
@@ -1973,15 +1980,12 @@ class qgd_SurSearch:
                 f"{selected_from_local}/{len(selected_indices)} selected",
                 f"  D distribution: {d_dist_str}",
             ]
-            for line in lines:
-                print(line)
             with open(log_file, 'a') as f:
                 f.write("\n".join(lines) + "\n")
 
             if iters_since_improvement >= patience:
                 msg = (f"Stagnation exit at iteration {itr} "
                        f"(no improvement for {patience} iters)")
-                print(msg)
                 with open(log_file, 'a') as f:
                     f.write(msg + "\n")
                 break
@@ -1992,7 +1996,6 @@ class qgd_SurSearch:
         self._decompose_time = _decompose_time
         self._decompose_count = _decompose_count
         self._total_search_time = time.time() - _search_t0
-        print("Solution not found")
         return best_circ
 
     def Start_Decomposition(self, D_start=None, D_end=None, log_file_prefix="sursearch"):
