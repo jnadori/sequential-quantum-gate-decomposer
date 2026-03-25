@@ -6,6 +6,7 @@ from squander.decomposition.qgd_N_Qubit_Decompositions_Wrapper import (
     qgd_N_Qubit_Decomposition_adaptive as N_Qubit_Decomposition_adaptive,
     qgd_N_Qubit_Decomposition_Tree_Search as N_Qubit_Decomposition_Tree_Search,
     qgd_N_Qubit_Decomposition_Tabu_Search as N_Qubit_Decomposition_Tabu_Search,
+    qgd_N_Qubit_Decomposition_Surrogate as N_Qubit_Decomposition_Surrogate
 )
 from squander import N_Qubit_Decomposition_custom, N_Qubit_Decomposition
 from squander.gates.qgd_Circuit import qgd_Circuit as Circuit
@@ -724,7 +725,7 @@ class qgd_Wide_Circuit_Optimization:
         config.setdefault('topology', None)
         config.setdefault('routed', False)
         config.setdefault('partition_strategy','ilp')
-        
+        config.setdefault('optimizer','BFGS')
         #testing the fields of config 
         strategy = config[ 'strategy' ]
         allowed_startegies = ['TreeSearch', 'TabuSearch', 'Adaptive', 'TreeGuided' ]
@@ -846,6 +847,8 @@ class qgd_Wide_Circuit_Optimization:
             cDecompose = N_Qubit_Decomposition_adaptive( Umtx.conj().T, level_limit_max=5, level_limit_min=1, topology=mini_topology )
         elif strategy == "TreeGuided":
             cDecompose = N_Qubit_Decomposition_Guided_Tree( Umtx.conj().T, config=config, accelerator_num=0, topology=mini_topology )
+        elif strategy == "SurrSearch":
+            cDecompose = N_Qubit_Decomposition_Surrogate( Umtx.conj().T, config=config, accelerator_num=0)
         elif strategy == "Custom":
             cDecompose = N_Qubit_Decomposition_custom( Umtx.conj().T, config=config, accelerator_num=0 )
             assert structure is not None, "Custom decomposition strategy requires a gate structure to be provided."
@@ -861,7 +864,7 @@ class qgd_Wide_Circuit_Optimization:
     
 
         # adding new layer to the decomposition until threshold
-        cDecompose.set_Optimizer( "BFGS" )
+        cDecompose.set_Optimizer( config['optimizer'] )
 
         # starting the decomposition
         try:
