@@ -45,7 +45,7 @@ typedef enum cost_function_type {FROBENIUS_NORM, FROBENIUS_NORM_CORRECTION1, FRO
 
 
 /// implemented optimization strategies
-enum optimization_aglorithms{ ADAM, BFGS, BFGS2, ADAM_BATCHED, AGENTS, COSINE, AGENTS_COMBINED, GRAD_DESCEND, BAYES_OPT, BAYES_AGENTS, GRAD_DESCEND_PARAMETER_SHIFT_RULE, POSMM, AGENTS_BFGS};
+enum optimization_aglorithms{ ADAM, BFGS, BFGS2, ADAM_BATCHED, AGENTS, COSINE, AGENTS_COMBINED, GRAD_DESCEND, BAYES_OPT, BAYES_AGENTS, GRAD_DESCEND_PARAMETER_SHIFT_RULE, POSMM};
 
 
 
@@ -87,6 +87,10 @@ protected:
     double correction2_scale;    
     /// cuts used for OSR entanglement cost function
     std::vector<std::vector<int>> use_cuts;
+    /// rank used for OSR entanglement cost function
+    int osr_rank = -1;
+    /// logical variable indicating whether to use softmax or average in the OSR entanglement cost function
+    bool use_softmax = false;
     
 
     /// number of iterations
@@ -233,14 +237,6 @@ static void export_current_cost_fnc(double current_minimum, Matrix_real& paramet
 @param solution_guess A matrix containing the solution guess.
 */
 void solve_layer_optimization_problem_AGENTS_COMBINED( int num_of_parameters, Matrix_real& solution_guess);
-
-
-/**
-@brief Call to solve layer by layer the optimization problem via the AGENTS_BFGS algorithm. The optimalized parameters are stored in attribute optimized_parameters.
-@param num_of_parameters Number of parameters to be optimized
-@param solution_guess A matrix containing the solution guess.
-*/
-void solve_layer_optimization_problem_AGENTS_BFGS( int num_of_parameters, Matrix_real& solution_guess);
 
 
 /**
@@ -556,6 +552,8 @@ void upload_Umtx_to_DFE();
 @brief Get the number of accelerators to be reserved on DFEs on users demand.
 */
 int get_accelerator_num();
+
+void set_osr_params( std::vector<std::vector<int>> use_cuts_in, int osr_rank_in, bool use_softmax_in );
 
 
 

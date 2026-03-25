@@ -60,7 +60,7 @@ operator()(const GrayCode_base<intType> &key) const {
     intType *data = key_loc.get_data();
     size_t hash_val = 0;
 
-    matrix_base<intType>&& n_ary_limits = key.get_Limits();
+    const matrix_base<intType>& n_ary_limits = key.get_Limits_ref();
     size_t pow = 1;
 
     for (size_t idx=0; idx<static_cast<size_t>(key.cols); idx++) {

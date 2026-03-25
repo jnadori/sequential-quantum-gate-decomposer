@@ -334,7 +334,7 @@ Optimization_Interface::calc_decomposition_error(Matrix& decomposed_matrix ) {
         decomposition_error = get_infidelity(decomposed_matrix);
         break;
     case OSR_ENTANGLEMENT:
-        decomposition_error = get_osr_entanglement_test(decomposed_matrix, use_cuts);
+        decomposition_error = get_osr_entanglement_test(decomposed_matrix, use_cuts, osr_rank, use_softmax);
         break;
     default: {
         std::string err("Optimization_Interface::optimization_problem: Cost function variant not implmented.");
@@ -421,9 +421,6 @@ void Optimization_Interface::solve_layer_optimization_problem( int num_of_parame
             return;
         case POSMM:
             solve_layer_optimization_problem_POSMM( num_of_parameters, solution_guess);
-            return;
-        case AGENTS_BFGS:
-            solve_layer_optimization_problem_AGENTS_BFGS( num_of_parameters, solution_guess);
             return;
         default:
             std::string error("Optimization_Interface::solve_layer_optimization_problem: unimplemented optimization algorithm");
@@ -535,7 +532,7 @@ double Optimization_Interface::optimization_problem( Matrix_real& parameters ) {
     case INFIDELITY:
         return get_infidelity(matrix_new);
     case OSR_ENTANGLEMENT:
-        return get_osr_entanglement_test(matrix_new, use_cuts);
+        return get_osr_entanglement_test(matrix_new, use_cuts, osr_rank, use_softmax);
     default: {
         std::string err("Optimization_Interface::optimization_problem: Cost function variant not implmented.");
         throw err;
@@ -853,7 +850,7 @@ double Optimization_Interface::optimization_problem( Matrix_real parameters, voi
         return 1.0-((trace_temp.real*trace_temp.real+trace_temp.imag*trace_temp.imag)/d+1)/(d+1);
     }
     case OSR_ENTANGLEMENT:
-        return get_osr_entanglement_test(matrix_new, use_cuts);
+        return get_osr_entanglement_test(matrix_new, use_cuts, osr_rank, use_softmax);
     default: {
         std::string err("Optimization_Interface::optimization_problem: Cost function variant not implmented.");
         throw err;
@@ -1083,7 +1080,7 @@ tbb::tick_count t0_CPU = tbb::tick_count::now();////////////////////////////////
     } else if (cost_fnc == OSR_ENTANGLEMENT) {
         Matrix matrix_new = instance->get_Umtx().copy();
         instance->apply_to( parameters, matrix_new );
-        Upartial = get_deriv_osr_entanglement(matrix_new, use_cuts);
+        Upartial = get_deriv_osr_entanglement(matrix_new, use_cuts, osr_rank, use_softmax);
     }
 
 
@@ -1134,7 +1131,7 @@ tbb::tick_count t0_CPU = tbb::tick_count::now();////////////////////////////////
                     auto paramcopy = parameters.copy();
                     paramcopy[idx] += 1e-10;
                     instance->apply_to( paramcopy, matrix_new );
-                    double f1 = instance->get_cost_function_variant() == SUM_OF_SQUARES ? get_cost_function_sum_of_squares(matrix_new) : get_osr_entanglement_test(matrix_new, use_cuts);
+                    double f1 = instance->get_cost_function_variant() == SUM_OF_SQUARES ? get_cost_function_sum_of_squares(matrix_new) : get_osr_entanglement_test(matrix_new, use_cuts, osr_rank, use_softmax);
                     double check = (f1 - *f0) / 1e-10;
                     //printf("%d: %g %g\n", idx, grad_comp, check);
                     grad_comp = check;
@@ -1395,11 +1392,6 @@ void Optimization_Interface::set_optimizer( optimization_aglorithms alg_in ) {
             random_shift_count_max = 1;
             max_outer_iterations = 100000000;
             return;
-        case AGENTS_BFGS:
-            max_inner_iterations = 5000;
-            random_shift_count_max = 10;
-            max_outer_iterations = 1;
-            return;
         default:
             std::string error("Optimization_Interface::set_optimizer: unimplemented optimization algorithm");
             throw error;
@@ -1549,6 +1541,15 @@ Optimization_Interface::get_accelerator_num() {
 }
 
 
+void Optimization_Interface::set_osr_params( std::vector<std::vector<int>> use_cuts_in, int osr_rank_in, bool use_softmax_in )
+{
+    use_cuts = use_cuts_in;
+    osr_rank = osr_rank_in;
+    use_softmax = use_softmax_in;
+    //std::stringstream sstream;
+    //sstream << "Optimization_Interface::set_osr_params: OSR entanglement test parameters set. osr_rank: " << osr_rank << ", use_softmax: " << use_softmax << std::endl;
+    //print(sstream, 2);
+}
 
 
 
