@@ -33,6 +33,36 @@ limitations under the License.
 #include "tbb/tbb.h"
 
 
+#include <cstdlib>
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
+#if BLAS == 1
+extern "C" void MKL_Set_Num_Threads(int);
+#elif BLAS == 2
+extern "C" void openblas_set_num_threads(int);
+#endif
+
+static void force_single_thread_blas_lapack() {
+    setenv("OMP_NUM_THREADS", "1", 1);
+    setenv("OMP_DYNAMIC", "FALSE", 1);
+    setenv("MKL_NUM_THREADS", "1", 1);
+    setenv("MKL_DYNAMIC", "FALSE", 1);
+    setenv("OPENBLAS_NUM_THREADS", "1", 1);
+
+#ifdef _OPENMP
+    omp_set_dynamic(0);
+    omp_set_num_threads(1);
+#endif
+
+#if BLAS == 1
+    MKL_Set_Num_Threads(1);
+#elif BLAS == 2
+    openblas_set_num_threads(1);
+#endif
+}
 // ============================================================================
 // Canonical prefix check — adapted from Tree_Search.cpp
 // ============================================================================
@@ -1722,7 +1752,8 @@ void N_Qubit_Decomposition_Surrogate::generate_candidates(
         for (int i = 0; i < n_local_target; ++i) {
             total_local_steps += local_steps[i];
             if (local_results[i].size() > 0 && seen.find(local_results[i]) == seen.end() &&
-                (D_max_gen < 0 || static_cast<int>(local_results[i].size()) <= D_max_gen)) {
+                (D_max_gen < 0 || static_cast<int>(local_results[i].size()) <= D_max_gen) &&
+                (D_min_gen < 0 || static_cast<int>(local_results[i].size()) >= D_min_gen)) {
                 seen.insert(local_results[i].copy());
                 candidates_out.push_back(std::move(local_results[i]));
                 n_local_found++;
@@ -1778,7 +1809,8 @@ void N_Qubit_Decomposition_Surrogate::generate_candidates(
         }
 
         if (result.size() > 0 && seen.find(result) == seen.end() &&
-            (!mixed_d || static_cast<int>(result.size()) <= D_max_gen)) {
+            (!mixed_d || (static_cast<int>(result.size()) >= D_min_gen &&
+                          static_cast<int>(result.size()) <= D_max_gen))) {
             seen.insert(result.copy());
             candidates_out.push_back(std::move(result));
         }
@@ -2089,9 +2121,9 @@ void N_Qubit_Decomposition_Surrogate::search_over_D_range(
             n_thompson_samples = rb_n_thompson_samples;
             local_search_fraction = rb_local_search_fraction;
             max_local_steps = rb_max_local_steps;
+            int rollback_min_D = std::max(D_min_search, win_lo + 1);
 
-            // Try to find shorter circuits by searching D_found-1 down to win_lo + 1 (since it wouldve found a solution at D_min in the last iter probably.), one D at a time
-            for (int D_try = D_found - 1; D_try >= win_lo + 1; --D_try) {
+            for (int D_try = D_found - 1; D_try >= rollback_min_D; --D_try) {
                 {
                     std::ofstream flog(log_file, std::ios::app);
                     flog << "Narrowing: solution at D=" << D_found
@@ -2655,16 +2687,74 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
             }
 
             // Thompson Sampling with posterior covariance
-            // Register candidates in the main cache to reuse existing kernel values
-            // instead of recomputing O(n_cand^2) SSK pairs from scratch
-            std::vector<int> cand_cache_idx(n_cand);
-            for (int i = 0; i < n_cand; ++i)
-                cand_cache_idx[i] = ssk_cache.register_circuit(candidates[i]);
+            // Compute candidate-candidate kernel WITHOUT registering in the
+            // main cache (avoids quadratic cache bloat over many iterations)
+            std::vector<double> K_cand_norm(n_cand * n_cand, 0.0);
+            {
+                // Group candidates by length for batch SSK
+                std::map<int, std::vector<int>> cand_by_len;
+                for (int i = 0; i < n_cand; ++i)
+                    cand_by_len[static_cast<int>(candidates[i].size())].push_back(i);
 
+                // Self-kernels (diagonal)
+                std::vector<double> cand_self(n_cand, 0.0);
+                for (auto& kv : cand_by_len) {
+                    int clen = kv.first;
+                    auto& idxs = kv.second;
+                    int ng = static_cast<int>(idxs.size());
+                    std::vector<int> ci(ng * clen);
+                    for (int i = 0; i < ng; ++i)
+                        std::memcpy(&ci[i * clen], candidates[idxs[i]].get_data(), clen * sizeof(int));
+                    std::vector<double> self_raw(ng);
+                    ssk_cache.batch_ssk_raw(ci.data(), ci.data(), ng, clen, clen, self_raw.data());
+                    for (int i = 0; i < ng; ++i)
+                        cand_self[idxs[i]] = self_raw[i];
+                }
+
+                // Cross-kernels (off-diagonal, grouped by length pairs)
+                std::vector<double> raw_cross(n_cand * n_cand, 0.0);
+                for (auto& kv_a : cand_by_len) {
+                    int len_a = kv_a.first;
+                    auto& idxs_a = kv_a.second;
+                    int na = static_cast<int>(idxs_a.size());
+                    for (auto& kv_b : cand_by_len) {
+                        int len_b = kv_b.first;
+                        auto& idxs_b = kv_b.second;
+                        int nb = static_cast<int>(idxs_b.size());
+
+                        int P = na * nb;
+                        std::vector<int> ci_flat(P * len_a);
+                        std::vector<int> cj_flat(P * len_b);
+                        for (int a = 0; a < na; ++a)
+                            for (int b = 0; b < nb; ++b) {
+                                int idx = a * nb + b;
+                                std::memcpy(&ci_flat[idx * len_a],
+                                            candidates[idxs_a[a]].get_data(), len_a * sizeof(int));
+                                std::memcpy(&cj_flat[idx * len_b],
+                                            candidates[idxs_b[b]].get_data(), len_b * sizeof(int));
+                            }
+                        std::vector<double> raw_batch(P);
+                        ssk_cache.batch_ssk_raw(ci_flat.data(), cj_flat.data(), P, len_a, len_b, raw_batch.data());
+                        for (int a = 0; a < na; ++a)
+                            for (int b = 0; b < nb; ++b)
+                                raw_cross[idxs_a[a] * n_cand + idxs_b[b]] = raw_batch[a * nb + b];
+                    }
+                }
+
+                // Normalize
+                for (int i = 0; i < n_cand; ++i) {
+                    double inv_i = 1.0 / std::sqrt(std::max(cand_self[i], 1e-24));
+                    for (int j = 0; j < n_cand; ++j) {
+                        double inv_j = 1.0 / std::sqrt(std::max(cand_self[j], 1e-24));
+                        K_cand_norm[i * n_cand + j] = raw_cross[i * n_cand + j] * inv_i * inv_j;
+                    }
+                }
+            }
+
+            // K_cand = scale * K_cand_norm (prior covariance)
             std::vector<double> K_cand(n_cand * n_cand);
-            ssk_cache.kernel_matrix(cand_cache_idx.data(), n_cand,
-                                    cand_cache_idx.data(), n_cand,
-                                    scale, K_cand.data());
+            for (int i = 0; i < n_cand * n_cand; ++i)
+                K_cand[i] = scale * K_cand_norm[i];
 
             for (int i = 0; i < n_cand; ++i) {
                 for (int j = 0; j < n_cand; ++j) {
@@ -2728,10 +2818,8 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
                     bool too_similar = false;
                     if (!selected_indices.empty() && diversity_thresh < 1.0) {
                         for (int prev : selected_indices) {
-                            // Use cached normalized kernel instead of recomputing SSK
-                            double k_val = ssk_cache.K_norm[
-                                cand_cache_idx[sidx] * ssk_cache.capacity_ +
-                                cand_cache_idx[prev]];
+                            // Use pre-computed normalized kernel (no cache needed)
+                            double k_val = K_cand_norm[sidx * n_cand + prev];
                             if (k_val > diversity_thresh) {
                                 too_similar = true;
                                 break;
@@ -2861,16 +2949,8 @@ void N_Qubit_Decomposition_Surrogate::start_decomposition() {
     print(sstream, 1);
 
     // Temporarily turn off OpenMP parallelism
-#if BLAS == 0
-    int num_threads_saved = omp_get_max_threads();
-    omp_set_num_threads(1);
-#elif BLAS == 1
-    int num_threads_saved = mkl_get_max_threads();
-    MKL_Set_Num_Threads(1);
-#elif BLAS == 2
-    int num_threads_saved = openblas_get_num_threads();
-    openblas_set_num_threads(1);
-#endif
+
+	force_single_thread_blas_lapack();
 
     int D_start = osr_D_min;
     int D_end = level_limit;
@@ -2893,14 +2973,7 @@ void N_Qubit_Decomposition_Surrogate::start_decomposition() {
         decomposition_error = best_score;
     }
 
-    // Restore thread count
-#if BLAS == 0
-    omp_set_num_threads(num_threads_saved);
-#elif BLAS == 1
-    MKL_Set_Num_Threads(num_threads_saved);
-#elif BLAS == 2
-    openblas_set_num_threads(num_threads_saved);
-#endif
+
 }
 
 Gates_block* N_Qubit_Decomposition_Surrogate::determine_gate_structure(
