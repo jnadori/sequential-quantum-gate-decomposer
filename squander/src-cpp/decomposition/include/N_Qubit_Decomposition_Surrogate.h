@@ -38,6 +38,7 @@ limitations under the License.
 #include <random>
 #include <set>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -219,6 +220,24 @@ protected:
     // Precomputed edge neighbor map: edge_neighbors[e] = edges sharing at least one qubit with e
     std::vector<std::vector<int>> edge_neighbors;
 
+    // Gate-based tokenization
+    // Token layout: [0, n_1q_tokens) = 1q gates, [n_1q_tokens, n_tokens) = directed CNOT gates
+    // For 1q token t: qubit = t % qbit_num, gate_type = gate_1q_types[t / qbit_num]
+    // For CNOT token t: directed_idx = t - n_1q_tokens
+    //   target = cnot_target_qbits[directed_idx], control = cnot_control_qbits[directed_idx]
+    bool gate_based_mode;                          // config flag, default false
+    int n_tokens;                                  // gate_based: n_1q_tokens + n_directed_cnots; else: n_edges
+    int n_1q_tokens;                               // gate_based: n_1q_types * qbit_num; else: 0
+    int n_directed_cnots;                          // gate_based: 2 * n_edges (both directions); else: 0
+    int n_1q_types;                                // number of distinct 1q gate types in alphabet
+    std::vector<gate_type> gate_1q_types;          // the 1q gate types in the alphabet
+    std::vector<int> gate_1q_param_counts;         // parameter count for each 1q gate type
+    std::vector<int> cnot_target_qbits;             // target qubit per directed CNOT
+    std::vector<int> cnot_control_qbits;            // control qubit per directed CNOT
+    std::vector<int> cnot_undirected_edge;          // undirected edge index per directed CNOT (for OSR)
+    std::vector<int> token_masks;                  // bitmask per token (1 bit for 1q, 2 for CNOT)
+    std::vector<std::vector<int>> token_neighbors; // tokens sharing at least one qubit
+
     // OSR data (using existing C++ infrastructure)
     std::vector<std::vector<int>> osr_cuts;
     std::vector<int> osr_cut_bounds;
@@ -344,9 +363,16 @@ public:
 
     Gates_block* construct_gate_structure(const GrayCode& gcode, bool finalize = true);
     void add_two_qubit_block(Gates_block* gate_structure, int target_qbit, int control_qbit);
+    void add_single_qubit_gate(Gates_block* gate_structure, int target_qbit, gate_type gtype = U3_OPERATION);
     // Bring base class add_finalyzing_layer into scope to avoid hiding
     using Optimization_Interface::add_finalyzing_layer;
     void add_finalyzing_layer(Gates_block* gate_structure);
+
+    // ---- Token helpers (gate-based mode) ----
+
+    /// Sort key for canonical ordering: (type, qubit1, qubit2)
+    /// U3 tokens: (0, qubit, -1). CNOT tokens: (1, target, control).
+    std::tuple<int,int,int> token_sort_key(int token) const;
 
     // ---- Validation and canonicalization ----
 

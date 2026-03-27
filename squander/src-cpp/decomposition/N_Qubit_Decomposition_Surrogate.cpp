@@ -934,6 +934,10 @@ N_Qubit_Decomposition_Surrogate::N_Qubit_Decomposition_Surrogate(
         }
     }
 
+    // Gate-based tokenization setup (deferred until after config parsing; see below)
+    // Default: edge-only mode
+    gate_based_mode = false;
+
     // Parse config
     level_limit = 0;
     if (config.count("level_limit") > 0) {
@@ -1098,6 +1102,122 @@ N_Qubit_Decomposition_Surrogate::N_Qubit_Decomposition_Surrogate(
         rb_max_local_steps = static_cast<int>(v);
     }
 
+    // Gate-based mode config
+    if (config.count("gate_based_mode") > 0) {
+        long long v; config["gate_based_mode"].get_property(v);
+        gate_based_mode = static_cast<bool>(v);
+    }
+
+    // Custom 1-qubit gateset for gate-based mode.
+    // gate_1q_gateset is a bitmask selecting which 1q gate types to include:
+    //   bit 0 = U3  (3 params)     bit 1 = RY (1 param)    bit 2 = RX (1 param)
+    //   bit 3 = RZ  (1 param)      bit 4 = H  (0 params)   bit 5 = X  (0 params)
+    //   bit 6 = Y   (0 params)     bit 7 = Z  (0 params)   bit 8 = S  (0 params)
+    //   bit 9 = SDG (0 params)     bit 10 = T (0 params)   bit 11 = TDG (0 params)
+    //   bit 12 = SX (0 params)     bit 13 = SXDG (0 params)
+    //   bit 14 = U1 (1 param)      bit 15 = U2 (2 params)  bit 16 = R (2 params)
+    // Default: 1 (U3 only, matching previous behavior).
+    n_1q_types = 0;
+    n_1q_tokens = 0;
+    gate_1q_types.clear();
+    gate_1q_param_counts.clear();
+
+    if (gate_based_mode) {
+        // Ordered table: (bit position, gate_type enum, parameter count)
+        const std::vector<std::tuple<int, gate_type, int>> gateset_table = {
+            { 0, U3_OPERATION,  3},
+            { 1, RY_OPERATION,  1},
+            { 2, RX_OPERATION,  1},
+            { 3, RZ_OPERATION,  1},
+            { 4, H_OPERATION,   0},
+            { 5, X_OPERATION,   0},
+            { 6, Y_OPERATION,   0},
+            { 7, Z_OPERATION,   0},
+            { 8, S_OPERATION,   0},
+            { 9, SDG_OPERATION, 0},
+            {10, T_OPERATION,   0},
+            {11, TDG_OPERATION, 0},
+            {12, SX_OPERATION,  0},
+            {13, SXDG_OPERATION,0},
+            {14, U1_OPERATION,  1},
+            {15, U2_OPERATION,  2},
+            {16, R_OPERATION,   2},
+        };
+
+        unsigned long long gateset_mask = 1;  // default: U3 only
+        if (config.count("gate_1q_gateset") > 0) {
+            long long v; config["gate_1q_gateset"].get_property(v);
+            gateset_mask = static_cast<unsigned long long>(v);
+        }
+
+        for (size_t gi = 0; gi < gateset_table.size(); ++gi) {
+            int bit = std::get<0>(gateset_table[gi]);
+            if (gateset_mask & (1ULL << bit)) {
+                gate_1q_types.push_back(std::get<1>(gateset_table[gi]));
+                gate_1q_param_counts.push_back(std::get<2>(gateset_table[gi]));
+            }
+        }
+        n_1q_types = static_cast<int>(gate_1q_types.size());
+        n_1q_tokens = n_1q_types * qbit_num;
+    }
+
+    // Build directed CNOT arrays for gate-based mode.
+    // Each undirected edge (a,b) yields two directed CNOTs: (target=a, control=b) and (target=b, control=a).
+    n_directed_cnots = 0;
+    cnot_target_qbits.clear();
+    cnot_control_qbits.clear();
+    cnot_undirected_edge.clear();
+
+    if (gate_based_mode) {
+        n_directed_cnots = 2 * n_edges;
+        cnot_target_qbits.resize(n_directed_cnots);
+        cnot_control_qbits.resize(n_directed_cnots);
+        cnot_undirected_edge.resize(n_directed_cnots);
+        for (int e = 0; e < n_edges; ++e) {
+            // Forward direction: target = topology[e][0], control = topology[e][1]
+            cnot_target_qbits[2*e]     = topology[e][0];
+            cnot_control_qbits[2*e]    = topology[e][1];
+            cnot_undirected_edge[2*e]  = e;
+            // Reverse direction: target = topology[e][1], control = topology[e][0]
+            cnot_target_qbits[2*e + 1]   = topology[e][1];
+            cnot_control_qbits[2*e + 1]  = topology[e][0];
+            cnot_undirected_edge[2*e + 1] = e;
+        }
+    }
+
+    // Build token arrays
+    // Token layout: [0, n_1q_tokens) = 1q gates, [n_1q_tokens, n_1q_tokens + n_directed_cnots) = directed CNOT
+    // For 1q token t: qubit = t % qbit_num, gate_type_idx = t / qbit_num
+    // For CNOT token t: directed_idx = t - n_1q_tokens
+    if (gate_based_mode) {
+        n_tokens = n_1q_tokens + n_directed_cnots;
+        token_masks.resize(n_tokens);
+        // 1q tokens: single-bit mask for the qubit
+        for (int t = 0; t < n_1q_tokens; ++t) {
+            int qubit = t % qbit_num;
+            token_masks[t] = (1 << vertex_to_bit[qubit]);
+        }
+        // Directed CNOT tokens: same 2-bit mask as undirected edge (both directions touch same qubits)
+        for (int d = 0; d < n_directed_cnots; ++d)
+            token_masks[n_1q_tokens + d] = edge_masks[cnot_undirected_edge[d]];
+
+        token_neighbors.resize(n_tokens);
+        for (int i = 0; i < n_tokens; ++i) {
+            for (int j = 0; j < n_tokens; ++j) {
+                if (i != j && (token_masks[i] & token_masks[j]))
+                    token_neighbors[i].push_back(j);
+            }
+        }
+    } else {
+        // Edge-only mode: alias existing arrays
+        n_1q_tokens = 0;
+        n_1q_types = 0;
+        n_directed_cnots = 0;
+        n_tokens = n_edges;
+        token_masks = edge_masks;
+        token_neighbors = edge_neighbors;
+    }
+
     // Compute OSR cut bounds using existing C++ infrastructure
     osr_cuts = unique_cuts(qbit_num);
     double Fnorm = std::sqrt(static_cast<double>(Umtx.rows));
@@ -1184,14 +1304,14 @@ GrayCode N_Qubit_Decomposition_Surrogate::canonical_form(const GrayCode& seq) {
     int n = static_cast<int>(seq.size());
     if (n == 0) return GrayCode();
 
-    // Build dependency DAG using edge bitmasks
+    // Build dependency DAG using token bitmasks
     std::vector<std::vector<int>> adj(n);
     std::vector<int> in_degree(n, 0);
 
     // Get masks for each position
     std::vector<int> masks(n);
     for (int i = 0; i < n; ++i)
-        masks[i] = edge_masks[seq[i]];
+        masks[i] = token_masks[seq[i]];
 
     for (int i = 0; i < n; ++i) {
         for (int j = 0; j < i; ++j) {
@@ -1202,26 +1322,25 @@ GrayCode N_Qubit_Decomposition_Surrogate::canonical_form(const GrayCode& seq) {
         }
     }
 
-    // Min-heap topological sort: (edge_pair, index)
+    // Min-heap topological sort using token_sort_key: (type, qubit1, qubit2)
     struct HeapNode {
-        std::pair<int,int> edge;
+        std::tuple<int,int,int> key;
         int idx;
         bool operator>(const HeapNode& o) const {
-            if (edge != o.edge) return edge > o.edge;
+            if (key != o.key) return key > o.key;
             return idx > o.idx;
         }
     };
     std::priority_queue<HeapNode, std::vector<HeapNode>, std::greater<HeapNode>> heap;
     for (int i = 0; i < n; ++i) {
         if (in_degree[i] == 0) {
-            heap.push(HeapNode{
-                std::make_pair(topology[seq[i]][0], topology[seq[i]][1]), i});
+            heap.push(HeapNode{token_sort_key(seq[i]), i});
         }
     }
 
     matrix_base<int> limits(1, n);
     for (int i = 0; i < n; ++i)
-        limits[i] = static_cast<int>(topology.size());
+        limits[i] = n_tokens;
     GrayCode result(limits);
 
     int pos = 0;
@@ -1232,9 +1351,7 @@ GrayCode N_Qubit_Decomposition_Surrogate::canonical_form(const GrayCode& seq) {
         for (int neighbor : adj[top.idx]) {
             in_degree[neighbor]--;
             if (in_degree[neighbor] == 0) {
-                heap.push(HeapNode{
-                    std::make_pair(topology[seq[neighbor]][0], topology[seq[neighbor]][1]),
-                    neighbor});
+                heap.push(HeapNode{token_sort_key(seq[neighbor]), neighbor});
             }
         }
     }
@@ -1249,7 +1366,7 @@ GrayCode N_Qubit_Decomposition_Surrogate::canonicalize_and_validate(const GrayCo
     // Check subspace constraints
     std::vector<int> masks(D);
     for (int i = 0; i < D; ++i)
-        masks[i] = edge_masks[canon[i]];
+        masks[i] = token_masks[canon[i]];
 
     for (int depth = 0; depth < D; ++depth) {
         if (check_new_position(masks.data(), depth))
@@ -1266,8 +1383,17 @@ GrayCode N_Qubit_Decomposition_Surrogate::canonicalize_and_validate(const GrayCo
 bool N_Qubit_Decomposition_Surrogate::check_osr_feasibility(const GrayCode& circuit) {
     int n_edges = static_cast<int>(topology.size());
     std::vector<int> edge_counts(n_edges, 0);
-    for (int i = 0; i < static_cast<int>(circuit.size()); ++i)
-        edge_counts[circuit[i]]++;
+    for (int i = 0; i < static_cast<int>(circuit.size()); ++i) {
+        int token = circuit[i];
+        if (gate_based_mode) {
+            if (token >= n_1q_tokens) {  // directed CNOT token
+                int dir_idx = token - n_1q_tokens;
+                edge_counts[cnot_undirected_edge[dir_idx]]++;
+            }
+        } else {
+            edge_counts[token]++;
+        }
+    }
 
     for (size_t c = 0; c < osr_cuts.size(); ++c) {
         if (osr_cut_bounds[c] <= 0) continue;
@@ -1286,14 +1412,13 @@ bool N_Qubit_Decomposition_Surrogate::check_osr_feasibility(const GrayCode& circ
 // ============================================================================
 
 std::vector<GrayCode> N_Qubit_Decomposition_Surrogate::enumerate_circuits(int D) {
-    int n_edges = static_cast<int>(topology.size());
     std::vector<GrayCode> results;
     GrayCodeSet seen;
 
     // DFS enumeration with pruning
     matrix_base<int> limits(1, D);
     for (int i = 0; i < D; ++i)
-        limits[i] = n_edges;
+        limits[i] = n_tokens;
 
     GrayCode path(0, limits);
     std::vector<int> path_masks(D, 0);
@@ -1310,9 +1435,9 @@ std::vector<GrayCode> N_Qubit_Decomposition_Surrogate::enumerate_circuits(int D)
             return;
         }
 
-        for (int e = 0; e < n_edges; ++e) {
+        for (int e = 0; e < n_tokens; ++e) {
             path[depth] = e;
-            path_masks[depth] = edge_masks[e];
+            path_masks[depth] = token_masks[e];
 
             if (check_new_position(path_masks.data(), depth))
                 continue;
@@ -1341,22 +1466,18 @@ std::vector<GrayCode> N_Qubit_Decomposition_Surrogate::enumerate_circuits(int D)
 // ============================================================================
 
 GrayCode N_Qubit_Decomposition_Surrogate::generate_valid_sequence(int D) {
-    int n_edges = static_cast<int>(topology.size());
-
     matrix_base<int> limits(1, D);
     for (int i = 0; i < D; ++i)
-        limits[i] = n_edges;
+        limits[i] = n_tokens;
 
     GrayCode path(0, limits);
     std::vector<int> path_masks(D, 0);
 
-    std::uniform_int_distribution<int> edge_dist(0, n_edges - 1);
-
     for (int depth = 0; depth < D; ++depth) {
         std::vector<int> valid;
-        for (int e = 0; e < n_edges; ++e) {
+        for (int e = 0; e < n_tokens; ++e) {
             path[depth] = e;
-            path_masks[depth] = edge_masks[e];
+            path_masks[depth] = token_masks[e];
             if (!check_new_position(path_masks.data(), depth))
                 valid.push_back(e);
         }
@@ -1365,7 +1486,7 @@ GrayCode N_Qubit_Decomposition_Surrogate::generate_valid_sequence(int D) {
         std::uniform_int_distribution<int> pick(0, static_cast<int>(valid.size()) - 1);
         int chosen = valid[pick(gen)];
         path[depth] = chosen;
-        path_masks[depth] = edge_masks[chosen];
+        path_masks[depth] = token_masks[chosen];
     }
 
     return canonicalize_and_validate(path);
@@ -1373,30 +1494,29 @@ GrayCode N_Qubit_Decomposition_Surrogate::generate_valid_sequence(int D) {
 
 GrayCode N_Qubit_Decomposition_Surrogate::mutate_point(const GrayCode& seq) {
     int D = static_cast<int>(seq.size());
-    int n_edges = static_cast<int>(topology.size());
-    if (n_edges < 2) return GrayCode();  // cannot substitute with only one edge
+    if (n_tokens < 2) return GrayCode();  // cannot substitute with only one token
     std::uniform_int_distribution<int> pos_dist(0, D - 1);
     std::uniform_real_distribution<double> coin(0.0, 1.0);
 
     for (int attempt = 0; attempt < 50; ++attempt) {
         int pos = pos_dist(gen);
-        int cur_edge = seq[pos];
-        int new_edge;
+        int cur_token = seq[pos];
+        int new_token;
 
-        // 70% chance: pick from neighboring edges (share a qubit) for higher acceptance
-        // 30% chance: pick any other edge for exploration
-        const std::vector<int>& nbrs = edge_neighbors[cur_edge];
+        // 70% chance: pick from neighboring tokens (share a qubit) for higher acceptance
+        // 30% chance: pick any other token for exploration
+        const std::vector<int>& nbrs = token_neighbors[cur_token];
         if (!nbrs.empty() && coin(gen) < 0.7) {
             std::uniform_int_distribution<int> nbr_dist(0, static_cast<int>(nbrs.size()) - 1);
-            new_edge = nbrs[nbr_dist(gen)];
+            new_token = nbrs[nbr_dist(gen)];
         } else {
-            std::uniform_int_distribution<int> edge_dist(0, n_edges - 2);
-            new_edge = edge_dist(gen);
-            if (new_edge >= cur_edge) ++new_edge;  // skip current edge
+            std::uniform_int_distribution<int> token_dist(0, n_tokens - 2);
+            new_token = token_dist(gen);
+            if (new_token >= cur_token) ++new_token;  // skip current token
         }
 
         GrayCode new_seq = seq.copy();
-        new_seq[pos] = new_edge;
+        new_seq[pos] = new_token;
         GrayCode result = canonicalize_and_validate(new_seq);
         if (result.size() > 0) return result;
     }
@@ -1422,23 +1542,22 @@ GrayCode N_Qubit_Decomposition_Surrogate::mutate_swap(const GrayCode& seq) {
 
 GrayCode N_Qubit_Decomposition_Surrogate::mutate_block(const GrayCode& seq, int blk_size) {
     int D = static_cast<int>(seq.size());
-    int n_edges = static_cast<int>(topology.size());
     int bs = std::min(blk_size, D);
     std::uniform_int_distribution<int> start_dist(0, D - bs);
-    std::uniform_int_distribution<int> edge_dist(0, n_edges - 1);
+    std::uniform_int_distribution<int> token_dist(0, n_tokens - 1);
     std::uniform_real_distribution<double> coin(0.0, 1.0);
 
     for (int attempt = 0; attempt < 50; ++attempt) {
         GrayCode new_seq = seq.copy();
         int start = start_dist(gen);
         for (int p = start; p < start + bs; ++p) {
-            int cur_edge = seq[p];
-            const std::vector<int>& nbrs = edge_neighbors[cur_edge];
+            int cur_token = seq[p];
+            const std::vector<int>& nbrs = token_neighbors[cur_token];
             if (!nbrs.empty() && coin(gen) < 0.5) {
                 std::uniform_int_distribution<int> nbr_dist(0, static_cast<int>(nbrs.size()) - 1);
                 new_seq[p] = nbrs[nbr_dist(gen)];
             } else {
-                new_seq[p] = edge_dist(gen);
+                new_seq[p] = token_dist(gen);
             }
         }
         GrayCode result = canonicalize_and_validate(new_seq);
@@ -1465,30 +1584,29 @@ GrayCode N_Qubit_Decomposition_Surrogate::crossover_uniform(const GrayCode& seq1
 GrayCode N_Qubit_Decomposition_Surrogate::mutate_grow(const GrayCode& seq, int D_max) {
     int D = static_cast<int>(seq.size());
     if (D >= D_max) return GrayCode();
-    int n_edges = static_cast<int>(topology.size());
     std::uniform_int_distribution<int> pos_dist(0, D);
-    std::uniform_int_distribution<int> edge_dist(0, n_edges - 1);
+    std::uniform_int_distribution<int> token_dist(0, n_tokens - 1);
     std::uniform_real_distribution<double> coin(0.0, 1.0);
 
     for (int attempt = 0; attempt < 50; ++attempt) {
         int pos = pos_dist(gen);
-        int edge;
-        // Bias toward edges neighboring the adjacent positions
-        int adj_edge = (pos < D) ? seq[pos] : seq[D - 1];
-        const std::vector<int>& nbrs = edge_neighbors[adj_edge];
+        int new_token;
+        // Bias toward tokens neighboring the adjacent positions
+        int adj_token = (pos < D) ? seq[pos] : seq[D - 1];
+        const std::vector<int>& nbrs = token_neighbors[adj_token];
         if (!nbrs.empty() && coin(gen) < 0.5) {
             std::uniform_int_distribution<int> nbr_dist(0, static_cast<int>(nbrs.size()) - 1);
-            edge = nbrs[nbr_dist(gen)];
+            new_token = nbrs[nbr_dist(gen)];
         } else {
-            edge = edge_dist(gen);
+            new_token = token_dist(gen);
         }
 
         // Build new sequence with insertion
         matrix_base<int> limits(1, D + 1);
-        for (int i = 0; i < D + 1; ++i) limits[i] = n_edges;
+        for (int i = 0; i < D + 1; ++i) limits[i] = n_tokens;
         GrayCode new_seq(limits);
         for (int i = 0; i < pos; ++i) new_seq[i] = seq[i];
-        new_seq[pos] = edge;
+        new_seq[pos] = new_token;
         for (int i = pos; i < D; ++i) new_seq[i + 1] = seq[i];
 
         GrayCode result = canonicalize_and_validate(new_seq);
@@ -1500,7 +1618,6 @@ GrayCode N_Qubit_Decomposition_Surrogate::mutate_grow(const GrayCode& seq, int D
 GrayCode N_Qubit_Decomposition_Surrogate::mutate_shrink(const GrayCode& seq, int D_min) {
     int D = static_cast<int>(seq.size());
     if (D <= D_min) return GrayCode();
-    int n_edges = static_cast<int>(topology.size());
     std::uniform_int_distribution<int> pos_dist(0, D - 1);
 
     for (int attempt = 0; attempt < 50; ++attempt) {
@@ -1522,7 +1639,6 @@ GrayCode N_Qubit_Decomposition_Surrogate::local_search_acq(
     double scale, GrayCodeSet& seen,
     int D_min_local, int D_max_local, int* steps_out) {
 
-    int n_edges = static_cast<int>(topology.size());
     GrayCode current = start.copy();
 
     // Evaluate LCB at start
@@ -1552,7 +1668,7 @@ GrayCode N_Qubit_Decomposition_Surrogate::local_search_acq(
 
         // Single-position substitution neighbors
         for (int pos = 0; pos < D; ++pos) {
-            for (int e = 0; e < n_edges; ++e) {
+            for (int e = 0; e < n_tokens; ++e) {
                 if (e == current[pos]) continue;
                 GrayCode new_seq = current.copy();
                 new_seq[pos] = e;
@@ -1565,9 +1681,9 @@ GrayCode N_Qubit_Decomposition_Surrogate::local_search_acq(
         // Grow neighbors
         if (D_max_local > 0 && D < D_max_local) {
             for (int pos = 0; pos <= D; ++pos) {
-                for (int e = 0; e < n_edges; ++e) {
+                for (int e = 0; e < n_tokens; ++e) {
                     matrix_base<int> limits(1, D + 1);
-                    for (int i = 0; i < D + 1; ++i) limits[i] = n_edges;
+                    for (int i = 0; i < D + 1; ++i) limits[i] = n_tokens;
                     GrayCode new_seq(limits);
                     for (int i = 0; i < pos; ++i) new_seq[i] = current[i];
                     new_seq[pos] = e;
@@ -1680,7 +1796,6 @@ void N_Qubit_Decomposition_Surrogate::generate_candidates(
     int D_min_gen, int D_max_gen) {
 
     candidates_out.clear();
-    int n_edges = static_cast<int>(topology.size());
     bool mixed_d = (D_min_gen >= 0 && D_max_gen >= 0);
 
     // Build valid population indices (respect D_max)
@@ -1831,9 +1946,26 @@ Gates_block* N_Qubit_Decomposition_Surrogate::construct_gate_structure(
     Gates_block* gate_structure = new Gates_block(qbit_num);
 
     for (int i = 0; i < static_cast<int>(gcode.size()); ++i) {
-        int target = possible_target_qbits[gcode[i]];
-        int control = possible_control_qbits[gcode[i]];
-        add_two_qubit_block(gate_structure, target, control);
+        int token = gcode[i];
+        if (gate_based_mode && token < n_1q_tokens) {
+            // 1-qubit gate: qubit = token % qbit_num, type index = token / qbit_num
+            int qubit = token % qbit_num;
+            int type_idx = token / qbit_num;
+            add_single_qubit_gate(gate_structure, qubit, gate_1q_types[type_idx]);
+        } else if (gate_based_mode) {
+            // Bare directed CNOT in gate-based mode
+            int dir_idx = token - n_1q_tokens;
+            int target = cnot_target_qbits[dir_idx];
+            int control = cnot_control_qbits[dir_idx];
+            Gates_block* layer = new Gates_block(qbit_num);
+            layer->add_cnot(target, control);
+            gate_structure->add_gate(layer);
+        } else {
+            // 2-qubit block in edge-based mode (U3+U3+CNOT)
+            int target = possible_target_qbits[token];
+            int control = possible_control_qbits[token];
+            add_two_qubit_block(gate_structure, target, control);
+        }
     }
 
     if (finalize)
@@ -1849,6 +1981,48 @@ void N_Qubit_Decomposition_Surrogate::add_two_qubit_block(
     layer->add_u3(control_qbit);
     layer->add_cnot(target_qbit, control_qbit);
     gate_structure->add_gate(layer);
+}
+
+void N_Qubit_Decomposition_Surrogate::add_single_qubit_gate(
+    Gates_block* gate_structure, int target_qbit, gate_type gtype) {
+    Gates_block* layer = new Gates_block(qbit_num);
+    switch (gtype) {
+        case U3_OPERATION:   layer->add_u3(target_qbit);   break;
+        case RY_OPERATION:   layer->add_ry(target_qbit);   break;
+        case RX_OPERATION:   layer->add_rx(target_qbit);   break;
+        case RZ_OPERATION:   layer->add_rz(target_qbit);   break;
+        case H_OPERATION:    layer->add_h(target_qbit);    break;
+        case X_OPERATION:    layer->add_x(target_qbit);    break;
+        case Y_OPERATION:    layer->add_y(target_qbit);    break;
+        case Z_OPERATION:    layer->add_z(target_qbit);    break;
+        case S_OPERATION:    layer->add_s(target_qbit);    break;
+        case SDG_OPERATION:  layer->add_sdg(target_qbit);  break;
+        case T_OPERATION:    layer->add_t(target_qbit);    break;
+        case TDG_OPERATION:  layer->add_tdg(target_qbit);  break;
+        case SX_OPERATION:   layer->add_sx(target_qbit);   break;
+        case SXDG_OPERATION: layer->add_sxdg(target_qbit); break;
+        case U1_OPERATION:   layer->add_u1(target_qbit);   break;
+        case U2_OPERATION:   layer->add_u2(target_qbit);   break;
+        case R_OPERATION:    layer->add_r(target_qbit);    break;
+        default:             layer->add_u3(target_qbit);   break;
+    }
+    gate_structure->add_gate(layer);
+}
+
+std::tuple<int,int,int> N_Qubit_Decomposition_Surrogate::token_sort_key(int token) const {
+    if (gate_based_mode && token < n_1q_tokens) {
+        // 1q token: (type=0, qubit, gate_type_index)
+        int qubit = token % qbit_num;
+        int type_idx = token / qbit_num;
+        return std::make_tuple(0, qubit, type_idx);
+    } else if (gate_based_mode) {
+        // Directed CNOT token: (type=1, target, control)
+        int dir_idx = token - n_1q_tokens;
+        return std::make_tuple(1, cnot_target_qbits[dir_idx], cnot_control_qbits[dir_idx]);
+    } else {
+        // Edge-mode: (type=0, target, control)
+        return std::make_tuple(0, topology[token][0], topology[token][1]);
+    }
 }
 
 void N_Qubit_Decomposition_Surrogate::add_finalyzing_layer(Gates_block* gate_structure) {
@@ -2954,6 +3128,14 @@ void N_Qubit_Decomposition_Surrogate::start_decomposition() {
 
     int D_start = osr_D_min;
     int D_end = level_limit;
+    if (gate_based_mode) {
+        // In gate-based mode, D counts individual gates (1q + CNOT), not 2q blocks.
+        // Each CNOT typically needs ~2 adjacent 1q gates, so scale by (1 + 2) = 3.
+        int gate_scale = 3;
+        D_start = osr_D_min * gate_scale;
+        if (D_end > 0)
+            D_end = D_end * gate_scale;
+    }
     if (D_end <= 0) D_end = D_start + 10;  // default range
 
     std::string log_prefix = project_name.empty() ? "sursearch" : "sursearch_" + project_name;
