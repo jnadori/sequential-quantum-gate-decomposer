@@ -11,7 +11,7 @@ from squander.decomposition.qgd_N_Qubit_Decompositions_Wrapper import (
 from squander import N_Qubit_Decomposition_custom, N_Qubit_Decomposition
 from squander.gates.qgd_Circuit import qgd_Circuit as Circuit
 from squander.utils import CompareCircuits
-from qgd_N_Qubit_Decomposition_Guided_tree import N_Qubit_Decomposition_Guided_Tree
+from squander.decomposition.qgd_N_Qubit_Decomposition_Guided_tree import N_Qubit_Decomposition_Guided_Tree
 import numpy as np
 from qiskit import QuantumCircuit
 
