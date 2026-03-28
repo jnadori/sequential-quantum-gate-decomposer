@@ -934,8 +934,7 @@ N_Qubit_Decomposition_Surrogate::N_Qubit_Decomposition_Surrogate(
         }
     }
 
-    // Gate-based tokenization setup (deferred until after config parsing; see below)
-    // Default: edge-only mode
+    // Default: edge-only mode (gate-based mode is in the GateLevel subclass)
     gate_based_mode = false;
 
     // Parse config
@@ -1102,121 +1101,19 @@ N_Qubit_Decomposition_Surrogate::N_Qubit_Decomposition_Surrogate(
         rb_max_local_steps = static_cast<int>(v);
     }
 
-    // Gate-based mode config
-    if (config.count("gate_based_mode") > 0) {
-        long long v; config["gate_based_mode"].get_property(v);
-        gate_based_mode = static_cast<bool>(v);
-    }
-
-    // Custom 1-qubit gateset for gate-based mode.
-    // gate_1q_gateset is a bitmask selecting which 1q gate types to include:
-    //   bit 0 = U3  (3 params)     bit 1 = RY (1 param)    bit 2 = RX (1 param)
-    //   bit 3 = RZ  (1 param)      bit 4 = H  (0 params)   bit 5 = X  (0 params)
-    //   bit 6 = Y   (0 params)     bit 7 = Z  (0 params)   bit 8 = S  (0 params)
-    //   bit 9 = SDG (0 params)     bit 10 = T (0 params)   bit 11 = TDG (0 params)
-    //   bit 12 = SX (0 params)     bit 13 = SXDG (0 params)
-    //   bit 14 = U1 (1 param)      bit 15 = U2 (2 params)  bit 16 = R (2 params)
-    // Default: 1 (U3 only, matching previous behavior).
+    // Edge-only tokenization (gate-based mode is in the GateLevel subclass)
     n_1q_types = 0;
     n_1q_tokens = 0;
+    n_directed_cnots = 0;
     gate_1q_types.clear();
     gate_1q_param_counts.clear();
-
-    if (gate_based_mode) {
-        // Ordered table: (bit position, gate_type enum, parameter count)
-        const std::vector<std::tuple<int, gate_type, int>> gateset_table = {
-            { 0, U3_OPERATION,  3},
-            { 1, RY_OPERATION,  1},
-            { 2, RX_OPERATION,  1},
-            { 3, RZ_OPERATION,  1},
-            { 4, H_OPERATION,   0},
-            { 5, X_OPERATION,   0},
-            { 6, Y_OPERATION,   0},
-            { 7, Z_OPERATION,   0},
-            { 8, S_OPERATION,   0},
-            { 9, SDG_OPERATION, 0},
-            {10, T_OPERATION,   0},
-            {11, TDG_OPERATION, 0},
-            {12, SX_OPERATION,  0},
-            {13, SXDG_OPERATION,0},
-            {14, U1_OPERATION,  1},
-            {15, U2_OPERATION,  2},
-            {16, R_OPERATION,   2},
-        };
-
-        unsigned long long gateset_mask = 1;  // default: U3 only
-        if (config.count("gate_1q_gateset") > 0) {
-            long long v; config["gate_1q_gateset"].get_property(v);
-            gateset_mask = static_cast<unsigned long long>(v);
-        }
-
-        for (size_t gi = 0; gi < gateset_table.size(); ++gi) {
-            int bit = std::get<0>(gateset_table[gi]);
-            if (gateset_mask & (1ULL << bit)) {
-                gate_1q_types.push_back(std::get<1>(gateset_table[gi]));
-                gate_1q_param_counts.push_back(std::get<2>(gateset_table[gi]));
-            }
-        }
-        n_1q_types = static_cast<int>(gate_1q_types.size());
-        n_1q_tokens = n_1q_types * qbit_num;
-    }
-
-    // Build directed CNOT arrays for gate-based mode.
-    // Each undirected edge (a,b) yields two directed CNOTs: (target=a, control=b) and (target=b, control=a).
-    n_directed_cnots = 0;
     cnot_target_qbits.clear();
     cnot_control_qbits.clear();
     cnot_undirected_edge.clear();
 
-    if (gate_based_mode) {
-        n_directed_cnots = 2 * n_edges;
-        cnot_target_qbits.resize(n_directed_cnots);
-        cnot_control_qbits.resize(n_directed_cnots);
-        cnot_undirected_edge.resize(n_directed_cnots);
-        for (int e = 0; e < n_edges; ++e) {
-            // Forward direction: target = topology[e][0], control = topology[e][1]
-            cnot_target_qbits[2*e]     = topology[e][0];
-            cnot_control_qbits[2*e]    = topology[e][1];
-            cnot_undirected_edge[2*e]  = e;
-            // Reverse direction: target = topology[e][1], control = topology[e][0]
-            cnot_target_qbits[2*e + 1]   = topology[e][1];
-            cnot_control_qbits[2*e + 1]  = topology[e][0];
-            cnot_undirected_edge[2*e + 1] = e;
-        }
-    }
-
-    // Build token arrays
-    // Token layout: [0, n_1q_tokens) = 1q gates, [n_1q_tokens, n_1q_tokens + n_directed_cnots) = directed CNOT
-    // For 1q token t: qubit = t % qbit_num, gate_type_idx = t / qbit_num
-    // For CNOT token t: directed_idx = t - n_1q_tokens
-    if (gate_based_mode) {
-        n_tokens = n_1q_tokens + n_directed_cnots;
-        token_masks.resize(n_tokens);
-        // 1q tokens: single-bit mask for the qubit
-        for (int t = 0; t < n_1q_tokens; ++t) {
-            int qubit = t % qbit_num;
-            token_masks[t] = (1 << vertex_to_bit[qubit]);
-        }
-        // Directed CNOT tokens: same 2-bit mask as undirected edge (both directions touch same qubits)
-        for (int d = 0; d < n_directed_cnots; ++d)
-            token_masks[n_1q_tokens + d] = edge_masks[cnot_undirected_edge[d]];
-
-        token_neighbors.resize(n_tokens);
-        for (int i = 0; i < n_tokens; ++i) {
-            for (int j = 0; j < n_tokens; ++j) {
-                if (i != j && (token_masks[i] & token_masks[j]))
-                    token_neighbors[i].push_back(j);
-            }
-        }
-    } else {
-        // Edge-only mode: alias existing arrays
-        n_1q_tokens = 0;
-        n_1q_types = 0;
-        n_directed_cnots = 0;
-        n_tokens = n_edges;
-        token_masks = edge_masks;
-        token_neighbors = edge_neighbors;
-    }
+    n_tokens = n_edges;
+    token_masks = edge_masks;
+    token_neighbors = edge_neighbors;
 
     // Compute OSR cut bounds using existing C++ infrastructure
     osr_cuts = unique_cuts(qbit_num);
@@ -1384,15 +1281,7 @@ bool N_Qubit_Decomposition_Surrogate::check_osr_feasibility(const GrayCode& circ
     int n_edges = static_cast<int>(topology.size());
     std::vector<int> edge_counts(n_edges, 0);
     for (int i = 0; i < static_cast<int>(circuit.size()); ++i) {
-        int token = circuit[i];
-        if (gate_based_mode) {
-            if (token >= n_1q_tokens) {  // directed CNOT token
-                int dir_idx = token - n_1q_tokens;
-                edge_counts[cnot_undirected_edge[dir_idx]]++;
-            }
-        } else {
-            edge_counts[token]++;
-        }
+        edge_counts[circuit[i]]++;
     }
 
     for (size_t c = 0; c < osr_cuts.size(); ++c) {
@@ -1947,25 +1836,10 @@ Gates_block* N_Qubit_Decomposition_Surrogate::construct_gate_structure(
 
     for (int i = 0; i < static_cast<int>(gcode.size()); ++i) {
         int token = gcode[i];
-        if (gate_based_mode && token < n_1q_tokens) {
-            // 1-qubit gate: qubit = token % qbit_num, type index = token / qbit_num
-            int qubit = token % qbit_num;
-            int type_idx = token / qbit_num;
-            add_single_qubit_gate(gate_structure, qubit, gate_1q_types[type_idx]);
-        } else if (gate_based_mode) {
-            // Bare directed CNOT in gate-based mode
-            int dir_idx = token - n_1q_tokens;
-            int target = cnot_target_qbits[dir_idx];
-            int control = cnot_control_qbits[dir_idx];
-            Gates_block* layer = new Gates_block(qbit_num);
-            layer->add_cnot(target, control);
-            gate_structure->add_gate(layer);
-        } else {
-            // 2-qubit block in edge-based mode (U3+U3+CNOT)
-            int target = possible_target_qbits[token];
-            int control = possible_control_qbits[token];
-            add_two_qubit_block(gate_structure, target, control);
-        }
+        // 2-qubit block in edge-based mode (U3+U3+CNOT)
+        int target = possible_target_qbits[token];
+        int control = possible_control_qbits[token];
+        add_two_qubit_block(gate_structure, target, control);
     }
 
     if (finalize)
@@ -2010,19 +1884,8 @@ void N_Qubit_Decomposition_Surrogate::add_single_qubit_gate(
 }
 
 std::tuple<int,int,int> N_Qubit_Decomposition_Surrogate::token_sort_key(int token) const {
-    if (gate_based_mode && token < n_1q_tokens) {
-        // 1q token: (type=0, qubit, gate_type_index)
-        int qubit = token % qbit_num;
-        int type_idx = token / qbit_num;
-        return std::make_tuple(0, qubit, type_idx);
-    } else if (gate_based_mode) {
-        // Directed CNOT token: (type=1, target, control)
-        int dir_idx = token - n_1q_tokens;
-        return std::make_tuple(1, cnot_target_qbits[dir_idx], cnot_control_qbits[dir_idx]);
-    } else {
-        // Edge-mode: (type=0, target, control)
-        return std::make_tuple(0, topology[token][0], topology[token][1]);
-    }
+    // Edge-mode: (type=0, target, control)
+    return std::make_tuple(0, topology[token][0], topology[token][1]);
 }
 
 void N_Qubit_Decomposition_Surrogate::add_finalyzing_layer(Gates_block* gate_structure) {
@@ -3128,14 +2991,6 @@ void N_Qubit_Decomposition_Surrogate::start_decomposition() {
 
     int D_start = osr_D_min;
     int D_end = level_limit;
-    if (gate_based_mode) {
-        // In gate-based mode, D counts individual gates (1q + CNOT), not 2q blocks.
-        // Each CNOT typically needs ~2 adjacent 1q gates, so scale by (1 + 2) = 3.
-        int gate_scale = 3;
-        D_start = osr_D_min * gate_scale;
-        if (D_end > 0)
-            D_end = D_end * gate_scale;
-    }
     if (D_end <= 0) D_end = D_start + 10;  // default range
 
     std::string log_prefix = project_name.empty() ? "sursearch" : "sursearch_" + project_name;

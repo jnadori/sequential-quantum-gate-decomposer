@@ -323,6 +323,19 @@ Gates_block::apply_to( Matrix_real& parameters_mtx_in, Matrix& input, int parall
 }
 
 
+/**
+@brief Call to apply the gate on the input array/matrix without parameters.
+Iterates over sub-gates and applies each one via its own no-parameter apply_to.
+@param input The input array on which the gate is applied
+@param parallel Set 0 for sequential execution, 1 for parallel execution with OpenMP and 2 for parallel with TBB (optional)
+*/
+void
+Gates_block::apply_to( Matrix& input, int parallel ) {
+    for (size_t idx = 0; idx < gates.size(); idx++) {
+        gates[idx]->apply_to(input, parallel);
+    }
+}
+
 
 //////// experimental attributes to partition the circuits into subsegments. Advantageous in simulation of larger circuits ///////////űű
 

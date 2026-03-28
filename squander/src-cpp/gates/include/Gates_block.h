@@ -113,6 +113,13 @@ void apply_to_list( Matrix_real& parameters, std::vector<Matrix>& inputs, int pa
 */
 virtual void apply_to( Matrix_real& parameters_mtx, Matrix& input, int parallel=0 );
 
+/**
+@brief Call to apply the gate on the input array/matrix without parameters (for 0-parameter blocks)
+@param input The input array on which the gate is applied
+@param parallel Set 0 for sequential execution, 1 for parallel execution with OpenMP and 2 for parallel with TBB (optional)
+*/
+void apply_to( Matrix& input, int parallel=0 ) override;
+
 
 
 

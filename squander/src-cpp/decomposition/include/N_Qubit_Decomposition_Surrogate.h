@@ -354,14 +354,14 @@ public:
     std::pair<double, Matrix_real> decompose(const GrayCode& circuit);
 
     /// Thread-safe decompose variant that takes an external RNG
-    std::pair<double, Matrix_real> decompose_with_rng(const GrayCode& circuit, std::mt19937& local_gen);
+    virtual std::pair<double, Matrix_real> decompose_with_rng(const GrayCode& circuit, std::mt19937& local_gen);
 
     /// Parallel decompose a batch of circuits using TBB (respects 'parallel' config)
     void parallel_decompose_batch(const std::vector<GrayCode>& circuits, std::vector<DecompResult>& results);
 
     // ---- Gate structure building (following Tree_Search pattern) ----
 
-    Gates_block* construct_gate_structure(const GrayCode& gcode, bool finalize = true);
+    virtual Gates_block* construct_gate_structure(const GrayCode& gcode, bool finalize = true);
     void add_two_qubit_block(Gates_block* gate_structure, int target_qbit, int control_qbit);
     void add_single_qubit_gate(Gates_block* gate_structure, int target_qbit, gate_type gtype = U3_OPERATION);
     // Bring base class add_finalyzing_layer into scope to avoid hiding
@@ -372,7 +372,7 @@ public:
 
     /// Sort key for canonical ordering: (type, qubit1, qubit2)
     /// U3 tokens: (0, qubit, -1). CNOT tokens: (1, target, control).
-    std::tuple<int,int,int> token_sort_key(int token) const;
+    virtual std::tuple<int,int,int> token_sort_key(int token) const;
 
     // ---- Validation and canonicalization ----
 
@@ -387,7 +387,7 @@ public:
     bool check_new_position(const int* window_masks, int pos);
 
     /// Check OSR feasibility of a circuit
-    bool check_osr_feasibility(const GrayCode& circuit);
+    virtual bool check_osr_feasibility(const GrayCode& circuit);
 
     // ---- Enumeration ----
 
