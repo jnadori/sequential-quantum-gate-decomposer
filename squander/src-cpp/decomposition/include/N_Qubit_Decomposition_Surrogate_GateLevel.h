@@ -16,8 +16,10 @@ limitations under the License.
 
 /*! \file N_Qubit_Decomposition_Surrogate_GateLevel.h
     \brief Header file for gate-level surrogate search.
-    Searches over CNOT skeletons (edge tokens) and tries multiple 1q gate
-    arrangements per skeleton during evaluation.
+    Searches over CROT skeletons (edge tokens) and tries two fixed 1q gate
+    patterns per skeleton during evaluation:
+      Pattern A: R(target)-Rz(target)-R(control)-Rz(control)-CROT
+      Pattern B: Rz(target)-R(control)-Rz(control)-CROT
 */
 
 #ifndef N_Qubit_Decomposition_Surrogate_GateLevel_H
@@ -56,7 +58,7 @@ public:
     std::pair<double, Matrix_real> decompose_with_rng(
         const GrayCode& circuit, std::mt19937& local_gen) override;
 
-    /// Build pattern library from gate_1q_gateset config
+    /// Build the two fixed 1q-gate patterns (called once from constructor)
     void build_pattern_library();
 
     /// Build gate structure using a specific pattern assignment (one pattern index per edge)

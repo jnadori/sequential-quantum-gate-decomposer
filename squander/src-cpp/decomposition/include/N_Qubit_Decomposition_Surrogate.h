@@ -160,6 +160,7 @@ public:
     std::vector<double> L_data;      // Cholesky factor, n_train x n_train row-major
     std::vector<double> alpha_data;  // K^{-1} y, length n_train
     std::vector<int> train_indices_; // indices into SSKCache for each training point
+    std::vector<double> inv_L_diag;  // 1.0 / L[i,i] for diagonal variance approximation
     int n_train;
 
     GPRegressor();
@@ -265,6 +266,8 @@ protected:
     int block_size;
     double local_search_fraction;
     int max_local_steps;
+    int local_search_positions;   // max positions to sample per local search step (0 = all)
+    int local_search_gp_subset;   // training subset size for lightweight GP in local search (0 = full)
     int n_thompson_samples;
     double diversity_thresh;
     double d_penalty;
@@ -279,6 +282,10 @@ protected:
     int window_max_iters;
     int max_consecutive_stagnations;
 
+    // Best-so-far plateau stagnation detection
+    int stagnation_window;              // lookback window for best-so-far plateau check (default 5)
+    double stagnation_improvement_frac; // required relative improvement in best (default 0.01)
+
     // Rollback-phase overrides (used during narrowing after solution found)
     double rb_kappa;
     int rb_window_patience;
@@ -287,6 +294,15 @@ protected:
     int rb_n_thompson_samples;
     double rb_local_search_fraction;
     int rb_max_local_steps;
+
+    // Adaptive kappa (exploration-exploitation scheduling)
+    bool adaptive_kappa;
+    double kappa_decay_rate;
+    double kappa_stagnation_boost;
+
+    // Position-guided mutations
+    double position_guided_fraction;
+    double position_lambda;
 
     // Random baseline mode (bypasses GP/Thompson sampling)
     bool use_random_candidates;
@@ -400,9 +416,13 @@ public:
     GrayCode mutate_point(const GrayCode& seq);
     GrayCode mutate_swap(const GrayCode& seq);
     GrayCode mutate_block(const GrayCode& seq, int blk_size);
+    GrayCode mutate_transplant(const GrayCode& recipient, const GrayCode& donor, int blk_size);
+    GrayCode mutate_block_regenerate(const GrayCode& seq, int blk_size);
     GrayCode crossover_uniform(const GrayCode& seq1, const GrayCode& seq2);
     GrayCode mutate_grow(const GrayCode& seq, int D_max);
     GrayCode mutate_shrink(const GrayCode& seq, int D_min);
+    GrayCode mutate_point_guided(const GrayCode& seq, SSKCache& cache,
+                                 GPRegressor& gp, double scale);
 
     /// Greedy local search on LCB acquisition
     GrayCode local_search_acq(const GrayCode& start, SSKCache& cache,
@@ -412,10 +432,12 @@ public:
                               int* steps_out = nullptr);
 
     /// Generate hybrid candidate set (local search + evolutionary)
+    /// train_y_norm: normalized training targets (for lightweight GP proxy), may be nullptr
     void generate_candidates(const std::vector<GrayCode>& population,
                              const double* scores, int n_pop,
                              int n_candidates,
                              SSKCache& cache, GPRegressor& gp, double scale,
+                             const double* train_y_norm,
                              GrayCodeSet& seen,
                              std::vector<GrayCode>& candidates_out,
                              int& n_local_out, double& avg_steps_out,
