@@ -976,11 +976,8 @@ N_Qubit_Decomposition_Surrogate::N_Qubit_Decomposition_Surrogate(
     enum_threshold = 10000;
     gp_max_train = 300;
     d_seed_budget = 50;
-    d_window_width = 2;
-    base_window_width = 1;
     window_patience = 50;
     window_max_iters = 100;
-    max_consecutive_stagnations = 3;
     stagnation_window = 5;
     stagnation_improvement_frac = 0.25;
     use_random_candidates = false;
@@ -1049,10 +1046,6 @@ N_Qubit_Decomposition_Surrogate::N_Qubit_Decomposition_Surrogate(
         long long v; config["enum_threshold"].get_property(v);
         enum_threshold = static_cast<int>(v);
     }
-    if (config.count("d_window_width") > 0) {
-        long long v; config["d_window_width"].get_property(v);
-        d_window_width = static_cast<int>(v);
-    }
     if (config.count("window_patience") > 0) {
         long long v; config["window_patience"].get_property(v);
         window_patience = static_cast<int>(v);
@@ -1068,10 +1061,6 @@ N_Qubit_Decomposition_Surrogate::N_Qubit_Decomposition_Surrogate(
     if (config.count("d_seed_budget") > 0) {
         long long v; config["d_seed_budget"].get_property(v);
         d_seed_budget = static_cast<int>(v);
-    }
-    if (config.count("max_consecutive_stagnations") > 0) {
-        long long v; config["max_consecutive_stagnations"].get_property(v);
-        max_consecutive_stagnations = static_cast<int>(v);
     }
     if (config.count("stagnation_window") > 0) {
         long long v; config["stagnation_window"].get_property(v);
@@ -1113,44 +1102,6 @@ N_Qubit_Decomposition_Surrogate::N_Qubit_Decomposition_Surrogate(
     if (config.count("position_lambda") > 0) {
         double v; config["position_lambda"].get_property(v);
         position_lambda = v;
-    }
-
-    // Rollback-phase defaults (inherit from main config, with higher patience)
-    rb_kappa = kappa;
-    rb_window_patience = window_patience * 2;
-    rb_window_max_iters = window_max_iters * 2;
-    rb_candidates_per_iter = candidates_per_iter;
-    rb_n_thompson_samples = n_thompson_samples;
-    rb_local_search_fraction = local_search_fraction;
-    rb_max_local_steps = max_local_steps;
-
-    // Override rollback config from user
-    if (config.count("rb_kappa") > 0) {
-        double v; config["rb_kappa"].get_property(v); rb_kappa = v;
-    }
-    if (config.count("rb_window_patience") > 0) {
-        long long v; config["rb_window_patience"].get_property(v);
-        rb_window_patience = static_cast<int>(v);
-    }
-    if (config.count("rb_window_max_iters") > 0) {
-        long long v; config["rb_window_max_iters"].get_property(v);
-        rb_window_max_iters = static_cast<int>(v);
-    }
-    if (config.count("rb_candidates_per_iter") > 0) {
-        long long v; config["rb_candidates_per_iter"].get_property(v);
-        rb_candidates_per_iter = static_cast<int>(v);
-    }
-    if (config.count("rb_n_thompson_samples") > 0) {
-        long long v; config["rb_n_thompson_samples"].get_property(v);
-        rb_n_thompson_samples = static_cast<int>(v);
-    }
-    if (config.count("rb_local_search_fraction") > 0) {
-        double v; config["rb_local_search_fraction"].get_property(v);
-        rb_local_search_fraction = v;
-    }
-    if (config.count("rb_max_local_steps") > 0) {
-        long long v; config["rb_max_local_steps"].get_property(v);
-        rb_max_local_steps = static_cast<int>(v);
     }
 
     // Edge-only tokenization (gate-based mode is in the GateLevel subclass)
@@ -2407,305 +2358,124 @@ void N_Qubit_Decomposition_Surrogate::search_over_D_range(
     // Log header
     {
         std::ofstream flog(log_file);
-        flog << "SurSearch (C++ rolling-window): N=" << qbit_num
+        flog << "SurSearch (C++ sequential-D): N=" << qbit_num
              << ", D=" << D_min_search << "-" << D_max_search
-             << ", W=" << std::max(1, d_window_width)
              << ", kappa=" << kappa << std::endl;
         flog << "---" << std::endl;
     }
 
-    // Rolling-window search: slide [win_lo, win_hi] across D range
-    // Persistent state across all windows
-    // Adaptive window width: sqrt(range) so wider ranges get wider windows
-    int D_range = D_max_search - D_min_search;
-    int W = std::max(d_window_width, static_cast<int>(
-        std::ceil(std::sqrt(std::max(1, D_range)))));
-    int win_lo = D_min_search;
-    int win_hi = std::min(win_lo + W - 1, D_max_search);
-    int consecutive_stagnations = 0;
-
-    SSKCache ssk_cache(sur_gap_decay, sur_match_decay, sur_ssk_order);
+    // Persistent state across all D values (but SSKCache is rebuilt per D)
     GrayCodeSet seen;
     std::vector<GrayCode> X;
     std::vector<double> y;
     std::vector<Matrix_real> all_params;
 
-    while (win_lo <= D_max_search) {
-        win_hi = std::min(win_lo + W - 1, D_max_search);
+    for (int D = D_min_search; D <= D_max_search; ++D) {
 
-        // --- Grow-seed each D in [win_lo, win_hi] that lacks samples ---
+        // --- Grow-seed D from D-1 circuits ---
         bool early_solution = false;
-        std::vector<int> n_grown_per_D(win_hi - win_lo + 1, 0);
+        int n_grown = 0;
 
-        for (int D = win_lo; D <= win_hi && !early_solution; ++D) {
-            // Count existing samples at this D
-            int existing_at_D = 0;
-            for (size_t i = 0; i < X.size(); ++i)
-                if (static_cast<int>(X[i].size()) == D)
-                    existing_at_D++;
+        // Count existing samples at this D
+        int existing_at_D = 0;
+        for (size_t i = 0; i < X.size(); ++i)
+            if (static_cast<int>(X[i].size()) == D)
+                existing_at_D++;
 
-            int needed = std::max(0, X0_size - existing_at_D);
-            if (needed <= 0) continue;
+        int needed = std::max(0, X0_size - existing_at_D);
 
+        if (needed > 0) {
             // Gather D-1 circuits sorted by score (best first)
             std::vector<int> prev_indices;
             for (size_t i = 0; i < X.size(); ++i)
                 if (static_cast<int>(X[i].size()) == D - 1)
                     prev_indices.push_back(static_cast<int>(i));
 
-            if (prev_indices.empty()) continue;
+            if (!prev_indices.empty()) {
+                std::sort(prev_indices.begin(), prev_indices.end(),
+                          [&](int a, int b) { return y[a] < y[b]; });
 
-            std::sort(prev_indices.begin(), prev_indices.end(),
-                      [&](int a, int b) { return y[a] < y[b]; });
+                // Phase A: batch-generate grown circuits
+                std::vector<GrayCode> grow_batch;
+                for (int pi : prev_indices) {
+                    if (static_cast<int>(grow_batch.size()) >= needed) break;
+                    for (int attempt = 0; attempt < 10; ++attempt) {
+                        GrayCode grown = mutate_grow(X[pi], D);
+                        if (grown.size() == 0) continue;
+                        if (static_cast<int>(grown.size()) != D) continue;
+                        if (seen.find(grown) != seen.end()) continue;
 
-            // Phase A: batch-generate grown circuits sequentially
-            std::vector<GrayCode> grow_batch;
-            for (int pi : prev_indices) {
-                if (static_cast<int>(grow_batch.size()) >= needed) break;
-                for (int attempt = 0; attempt < 10; ++attempt) {
-                    GrayCode grown = mutate_grow(X[pi], D);
-                    if (grown.size() == 0) continue;
-                    if (static_cast<int>(grown.size()) != D) continue;
-                    if (seen.find(grown) != seen.end()) continue;
+                        seen.insert(grown.copy());
+                        grow_batch.push_back(std::move(grown));
+                        break;
+                    }
+                }
 
-                    seen.insert(grown.copy());
-                    ssk_cache.register_circuit(grown);
-                    grow_batch.push_back(std::move(grown));
-                    break;
+                // Phase B: parallel decompose
+                std::vector<DecompResult> grow_results;
+                parallel_decompose_batch(grow_batch, grow_results);
+
+                // Phase C: sequential state update
+                for (int gi = 0; gi < static_cast<int>(grow_batch.size()); ++gi) {
+                    decompose_time += grow_results[gi].elapsed;
+                    decompose_count++;
+
+                    y.push_back(grow_results[gi].score);
+                    all_params.push_back(grow_results[gi].params);
+                    X.push_back(std::move(grow_batch[gi]));
+                    n_grown++;
+
+                    if (y.back() < best_score) {
+                        best_score = y.back();
+                        best_circuit = X.back().copy();
+                        best_params = all_params.back();
+                    }
+                    if (y.back() < tolerance) {
+                        early_solution = true;
+                    }
+                    if (early_solution) break;
                 }
             }
-
-            // Phase B: parallel decompose
-            std::vector<DecompResult> grow_results;
-            parallel_decompose_batch(grow_batch, grow_results);
-
-            // Phase C: sequential state update
-            int n_grown = 0;
-            for (int gi = 0; gi < static_cast<int>(grow_batch.size()); ++gi) {
-                decompose_time += grow_results[gi].elapsed;
-                decompose_count++;
-
-                y.push_back(grow_results[gi].score);
-                all_params.push_back(grow_results[gi].params);
-                X.push_back(std::move(grow_batch[gi]));
-                n_grown++;
-
-                if (y.back() < best_score) {
-                    best_score = y.back();
-                    best_circuit = X.back().copy();
-                    best_params = all_params.back();
-                }
-                if (y.back() < tolerance) {
-                    early_solution = true;
-                }
-                if (early_solution) break;
-            }
-            n_grown_per_D[D - win_lo] = n_grown;
         }
 
-        // Log window header with grow-seed counts
+        // Log D header
         {
             std::ofstream flog(log_file, std::ios::app);
-            flog << "\n=== Window [" << win_lo << "," << win_hi << "] (grow-seeded:";
-            for (int D = win_lo; D <= win_hi; ++D)
-                flog << " D" << D << "=" << n_grown_per_D[D - win_lo];
-            flog << ") ===" << std::endl;
+            flog << "\n=== D=" << D << " (grow-seeded: " << n_grown << ") ===" << std::endl;
         }
 
         if (early_solution) {
             std::ofstream flog(log_file, std::ios::app);
             flog << "SOLUTION found during grow-seeding at D="
                  << best_circuit.size() << ", score=" << best_score << std::endl;
+            break;
+        }
+
+        // --- Build fresh SSKCache for this D ---
+        // Register only the top 2*gp_max_train circuits by score (bounded cache)
+        int d_filter = std::max(1, D - 1);
+        std::vector<int> cache_candidates;
+        for (int i = 0; i < static_cast<int>(X.size()); ++i) {
+            if (static_cast<int>(X[i].size()) >= d_filter)
+                cache_candidates.push_back(i);
+        }
+        std::sort(cache_candidates.begin(), cache_candidates.end(),
+                  [&y](int a, int b) { return y[a] < y[b]; });
+        int cache_limit = std::min(static_cast<int>(cache_candidates.size()),
+                                   2 * gp_max_train);
+
+        SSKCache ssk_cache(sur_gap_decay, sur_match_decay, sur_ssk_order);
+        for (int ci = 0; ci < cache_limit; ++ci)
+            ssk_cache.register_circuit(X[cache_candidates[ci]]);
+
+        // --- Run search at this D ---
+        WindowResult result = run_window_search(D, D,
+            ssk_cache, seen, X, y, all_params, log_file);
+
+        if (result == WINDOW_SUCCESS) {
+            std::ofstream flog(log_file, std::ios::app);
             flog << "SOLUTION at D=" << best_circuit.size() << std::endl;
-        }
-
-        // --- Run window search (skip if already solved during seeding) ---
-        double best_at_entry = best_score;
-        bool found_in_window = early_solution;
-        if (!early_solution) {
-            WindowResult result = run_window_search(win_lo, win_hi,
-                ssk_cache, seen, X, y, all_params, log_file);
-
-            found_in_window = (result == WINDOW_SUCCESS);
-        }
-
-        if (found_in_window) {
-            int D_found = static_cast<int>(best_circuit.size());
-            if (!early_solution) {
-                std::ofstream flog(log_file, std::ios::app);
-                flog << "SOLUTION at D=" << D_found << std::endl;
-            }
-
-            // Swap to rollback config for narrowing phase
-            double save_kappa = kappa;
-            int save_wp = window_patience;
-            int save_wmi = window_max_iters;
-            int save_cpi = candidates_per_iter;
-            int save_nts = n_thompson_samples;
-            double save_lsf = local_search_fraction;
-            int save_mls = max_local_steps;
-
-            kappa = rb_kappa;
-            window_patience = rb_window_patience;
-            window_max_iters = rb_window_max_iters;
-            candidates_per_iter = rb_candidates_per_iter;
-            n_thompson_samples = rb_n_thompson_samples;
-            local_search_fraction = rb_local_search_fraction;
-            max_local_steps = rb_max_local_steps;
-            int rollback_min_D = std::max(D_min_search, win_lo + 1);
-
-            for (int D_try = D_found - 1; D_try >= rollback_min_D; --D_try) {
-                {
-                    std::ofstream flog(log_file, std::ios::app);
-                    flog << "Narrowing: solution at D=" << D_found
-                         << ", trying D=" << D_try << std::endl;
-                }
-
-                // Grow-seed into D_try from D_try-1 circuits if needed
-                int existing_at_D = 0;
-                for (size_t i = 0; i < X.size(); ++i)
-                    if (static_cast<int>(X[i].size()) == D_try)
-                        existing_at_D++;
-
-                if (existing_at_D < X0_size) {
-                    std::vector<int> prev_indices;
-                    for (size_t i = 0; i < X.size(); ++i)
-                        if (static_cast<int>(X[i].size()) == D_try - 1)
-                            prev_indices.push_back(static_cast<int>(i));
-                    std::sort(prev_indices.begin(), prev_indices.end(),
-                              [&](int a, int b) { return y[a] < y[b]; });
-
-                    int needed = X0_size - existing_at_D;
-
-                    // Phase A: batch-generate grown circuits sequentially
-                    std::vector<GrayCode> narrow_batch;
-                    for (int pi : prev_indices) {
-                        if (static_cast<int>(narrow_batch.size()) >= needed) break;
-                        for (int attempt = 0; attempt < 10; ++attempt) {
-                            GrayCode grown = mutate_grow(X[pi], D_try);
-                            if (grown.size() == 0 || static_cast<int>(grown.size()) != D_try) continue;
-                            if (seen.find(grown) != seen.end()) continue;
-
-                            seen.insert(grown.copy());
-                            ssk_cache.register_circuit(grown);
-                            narrow_batch.push_back(std::move(grown));
-                            break;
-                        }
-                    }
-
-                    // Phase B: parallel decompose
-                    std::vector<DecompResult> narrow_results;
-                    parallel_decompose_batch(narrow_batch, narrow_results);
-
-                    // Phase C: sequential state update
-                    for (int gi = 0; gi < static_cast<int>(narrow_batch.size()); ++gi) {
-                        decompose_time += narrow_results[gi].elapsed;
-                        decompose_count++;
-
-                        y.push_back(narrow_results[gi].score);
-                        all_params.push_back(narrow_results[gi].params);
-                        X.push_back(std::move(narrow_batch[gi]));
-
-                        if (y.back() < best_score) {
-                            best_score = y.back();
-                            best_circuit = X.back().copy();
-                            best_params = all_params.back();
-                        }
-                    }
-                }
-
-                WindowResult narrow_result = run_window_search(D_try, D_try,
-                    ssk_cache, seen, X, y, all_params, log_file);
-
-                if (narrow_result == WINDOW_SUCCESS) {
-                    D_found = static_cast<int>(best_circuit.size());
-                    {
-                        std::ofstream flog(log_file, std::ios::app);
-                        flog << "SOLUTION at D=" << D_found << std::endl;
-                    }
-                    // Continue narrowing from this new D_found
-                    continue;
-                } else {
-                    std::ofstream flog(log_file, std::ios::app);
-                    flog << "D=" << D_try << " stagnated, minimum depth is D="
-                         << D_found << std::endl;
-                    break;
-                }
-            }
-
-            // Restore rolling-window config
-            kappa = save_kappa;
-            window_patience = save_wp;
-            window_max_iters = save_wmi;
-            candidates_per_iter = save_cpi;
-            n_thompson_samples = save_nts;
-            local_search_fraction = save_lsf;
-            max_local_steps = save_mls;
-
-            break;  // Done — narrowing complete
-        }
-
-        // --- Find which D had the best result in this window ---
-        int window_best_D = win_lo;
-        double window_best_score = std::numeric_limits<double>::infinity();
-        for (size_t i = 0; i < X.size(); ++i) {
-            int d = static_cast<int>(X[i].size());
-            if (d >= win_lo && d <= win_hi && y[i] < window_best_score) {
-                window_best_score = y[i];
-                window_best_D = d;
-            }
-        }
-
-        // --- Slide the window forward ---
-        // Improvement = >1% relative gain AND score is actually good (below 0.5).
-        // Without the threshold, first window always "improves" from infinity.
-        bool improved = (best_score < best_at_entry * 0.99) &&
-                        (best_score < 0.5);
-
-        // Next window must not include D values below the window's best D
-        int min_next_lo = window_best_D;
-
-        if (improved) {
-            consecutive_stagnations = 0;
-            win_lo = std::max(win_lo + 1, min_next_lo);
-            {
-                std::ofstream flog(log_file, std::ios::app);
-                flog << "Window [" << win_lo - 1 << "," << win_hi
-                     << "] improved (best at D=" << window_best_D
-                     << "), sliding to [" << win_lo << ","
-                     << std::min(win_lo + W - 1, D_max_search) << "]" << std::endl;
-            }
-        } else {
-            consecutive_stagnations++;
-            if (consecutive_stagnations >= max_consecutive_stagnations) {
-                // Adaptive jump: sqrt(remaining range) — aggressive leaps
-                // early when OSR underestimates, tapering near D_max
-                int remaining = D_max_search - win_lo;
-                int jump = std::max(W, static_cast<int>(
-                    std::ceil(std::sqrt(std::max(1, remaining)))));
-                int old_lo = win_lo;
-                win_lo = std::max(win_lo + jump, min_next_lo);
-                consecutive_stagnations = 0;
-                {
-                    std::ofstream flog(log_file, std::ios::app);
-                    flog << "Window [" << old_lo << "," << win_hi
-                         << "] stagnated (" << max_consecutive_stagnations
-                         << "/" << max_consecutive_stagnations
-                         << "), jumping +" << (win_lo - old_lo) << " to [" << win_lo << ","
-                         << std::min(win_lo + W - 1, D_max_search) << "]" << std::endl;
-                }
-            } else {
-                int old_lo = win_lo;
-                win_lo = std::max(win_lo + 1, min_next_lo);
-                {
-                    std::ofstream flog(log_file, std::ios::app);
-                    flog << "Window [" << old_lo << "," << win_hi
-                         << "] stagnated (" << consecutive_stagnations
-                         << "/" << max_consecutive_stagnations
-                         << "), sliding to [" << win_lo << ","
-                         << std::min(win_lo + W - 1, D_max_search) << "]" << std::endl;
-                }
-            }
+            break;
         }
     }
 
@@ -2929,7 +2699,7 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
             // Surrogate-assisted search: GP + Thompson sampling
             // ============================================================
 
-            // Build filtered pool (indices into X) for circuits with D >= d_filter_min
+            // Build filtered pool sorted by score, register top 2*gp_max_train
             std::vector<int> filtered_x_indices;
             for (int i = 0; i < static_cast<int>(X.size()); ++i) {
                 if (static_cast<int>(X[i].size()) >= d_filter_min)
@@ -2938,20 +2708,31 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
             int n_filtered = static_cast<int>(filtered_x_indices.size());
             if (n_filtered == 0) break;
 
-            // Cap GP training set at gp_max_train using hybrid selection:
-            // 50% best-by-score (exploitation) + 50% pivoted Cholesky (diversity)
             std::sort(filtered_x_indices.begin(), filtered_x_indices.end(),
                       [&y](int a, int b) { return y[a] < y[b]; });
 
+            // Register top 2*gp_max_train by score (lazy, bounded)
+            int reg_limit = std::min(n_filtered, 2 * gp_max_train);
+            for (int i = 0; i < reg_limit; ++i) {
+                int xi = filtered_x_indices[i];
+                if (ssk_cache.circuit_to_idx.find(X[xi]) == ssk_cache.circuit_to_idx.end())
+                    ssk_cache.register_circuit(X[xi]);
+            }
+
+            // Cap GP training set at gp_max_train using hybrid selection:
+            // 50% best-by-score + 50% pivoted Cholesky (diversity)
+            // Only use the registered subset for pivoted Cholesky
+            int n_pool = reg_limit;  // work within registered circuits
+
             std::vector<int> selected_fi;  // selected indices into filtered_x_indices
-            if (n_filtered <= gp_max_train) {
-                selected_fi.resize(n_filtered);
-                for (int i = 0; i < n_filtered; ++i) selected_fi[i] = i;
+            if (n_pool <= gp_max_train) {
+                selected_fi.resize(n_pool);
+                for (int i = 0; i < n_pool; ++i) selected_fi[i] = i;
             } else {
                 int n_best = gp_max_train / 2;
                 int n_total = gp_max_train;
                 selected_fi.reserve(n_total);
-                std::vector<bool> taken(n_filtered, false);
+                std::vector<bool> taken(n_pool, false);
 
                 // Stage 1: top n_best by score (already sorted)
                 for (int i = 0; i < n_best; ++i) {
@@ -2960,14 +2741,14 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
                 }
 
                 // Stage 2: pivoted Cholesky for kernel-diverse points
-                std::vector<int> cidx(n_filtered);
-                for (int i = 0; i < n_filtered; ++i)
+                std::vector<int> cidx(n_pool);
+                for (int i = 0; i < n_pool; ++i)
                     cidx[i] = ssk_cache.circuit_to_idx[X[filtered_x_indices[i]]];
                 int cap = ssk_cache.capacity_;
 
                 // L(i,j) Cholesky factor, d[i] residual diagonal
-                std::vector<double> L_data(static_cast<size_t>(n_filtered) * n_total, 0.0);
-                std::vector<double> d(n_filtered, 1.0);
+                std::vector<double> L_data(static_cast<size_t>(n_pool) * n_total, 0.0);
+                std::vector<double> d(n_pool, 1.0);
 
                 for (int j = 0; j < n_total; ++j) {
                     int pj;
@@ -2976,7 +2757,7 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
                     } else {
                         pj = -1;
                         double max_d = -1;
-                        for (int i = 0; i < n_filtered; ++i)
+                        for (int i = 0; i < n_pool; ++i)
                             if (!taken[i] && d[i] > max_d) { max_d = d[i]; pj = i; }
                         if (pj < 0 || max_d < 1e-12) break;
                         selected_fi.push_back(pj);
@@ -2986,7 +2767,7 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
                     double L_diag = std::sqrt(std::max(d[pj], 1e-12));
                     L_data[pj * n_total + j] = L_diag;
 
-                    for (int i = 0; i < n_filtered; ++i) {
+                    for (int i = 0; i < n_pool; ++i) {
                         if (i == pj) continue;
                         if (j >= n_best && taken[i]) continue;
                         double K_val = ssk_cache.K_norm[cidx[i] * cap + cidx[pj]];
@@ -3106,81 +2887,129 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
             // --- Acquisition phase ---
             t_phase0 = std::chrono::high_resolution_clock::now();
 
+            int n_t = gp.n_train;
+
             // Screen with GP: compute cross-kernel only for training subset
             std::vector<int> train_indices_vec(train_indices.begin(),
                                                train_indices.begin() + n_x);
-            std::vector<double> Ks(gp.n_train * n_cand);
+            std::vector<double> Ks(n_t * n_cand);
             ssk_cache.compute_cross_kernel_subset(candidates, scale,
                                                   train_indices_vec, Ks.data());
 
+            // Compute mu and approximate std for all candidates (cheap diagonal approx)
             std::vector<double> log_mu_norm(n_cand);
+            std::vector<double> approx_lcb(n_cand);
             for (int j = 0; j < n_cand; ++j) {
-                double val = 0;
-                for (int i = 0; i < gp.n_train; ++i)
-                    val += Ks[i * n_cand + j] * gp.alpha_data[i];
-                log_mu_norm[j] = val;
-            }
-
-            // Solve L v = Ks for variance
-            std::vector<double> v(gp.n_train * n_cand);
-            std::memcpy(v.data(), Ks.data(), gp.n_train * n_cand * sizeof(double));
-            LAPACKE_dtrtrs(LAPACK_ROW_MAJOR, 'L', 'N', 'N',
-                           gp.n_train, n_cand, gp.L_data.data(), gp.n_train,
-                           v.data(), n_cand);
-
-            std::vector<double> log_std_norm(n_cand);
-            for (int j = 0; j < n_cand; ++j) {
-                double sv2 = 0;
-                for (int i = 0; i < gp.n_train; ++i)
-                    sv2 += v[i * n_cand + j] * v[i * n_cand + j];
-                log_std_norm[j] = std::sqrt(std::max(scale - sv2, 0.0));
-            }
-
-            // LCB top-k selection with cosine diversity filtering
-            // Compute LCB = mu - kappa * std (with optional D-penalty)
-            std::vector<double> lcb_scores(n_cand);
-            for (int j = 0; j < n_cand; ++j) {
-                double mu_j = log_mu_norm[j];
+                double mu_val = 0;
+                double v2_sum = 0;
+                for (int i = 0; i < n_t; ++i) {
+                    double ks_ij = Ks[i * n_cand + j];
+                    mu_val += ks_ij * gp.alpha_data[i];
+                    double v_approx = ks_ij * gp.inv_L_diag[i];
+                    v2_sum += v_approx * v_approx;
+                }
+                log_mu_norm[j] = mu_val;
+                double mu_j = mu_val;
                 if (d_penalty > 0 && win_hi > 0) {
                     double D_val = static_cast<double>(candidates[j].size());
                     mu_j += d_penalty * (D_val / win_hi);
                 }
-                lcb_scores[j] = mu_j - kappa * log_std_norm[j];
+                double std_approx = std::sqrt(std::max(scale - v2_sum, 0.0));
+                approx_lcb[j] = mu_j - kappa * std_approx;
             }
 
-            // Sort candidates by LCB ascending (lower = better)
-            std::vector<int> lcb_order(n_cand);
+            // Pre-filter: keep top n_shortlist by approximate LCB
+            // Use 4x the pick count to leave room for diversity filtering
+            int n_pick = std::min(n_thompson_samples, n_cand);
+            int n_shortlist = std::min(n_cand, std::max(n_pick * 4, 200));
+
+            std::vector<int> approx_order(n_cand);
+            std::iota(approx_order.begin(), approx_order.end(), 0);
+            std::partial_sort(approx_order.begin(),
+                              approx_order.begin() + n_shortlist,
+                              approx_order.end(),
+                              [&](int a, int b) { return approx_lcb[a] < approx_lcb[b]; });
+
+            // Build shortlist mapping: shortlist position -> original candidate index
+            std::vector<int> shortlist(approx_order.begin(),
+                                       approx_order.begin() + n_shortlist);
+
+            // Exact forward solve only for shortlisted candidates
+            // Extract Ks columns for shortlist into compact array
+            std::vector<double> Ks_short(n_t * n_shortlist);
+            for (int s = 0; s < n_shortlist; ++s) {
+                int j = shortlist[s];
+                for (int i = 0; i < n_t; ++i)
+                    Ks_short[i * n_shortlist + s] = Ks[i * n_cand + j];
+            }
+
+            // Free full Ks — no longer needed
+            { std::vector<double>().swap(Ks); }
+
+            // Solve L v = Ks_short for exact variance
+            std::vector<double> v(n_t * n_shortlist);
+            std::memcpy(v.data(), Ks_short.data(), n_t * n_shortlist * sizeof(double));
+            LAPACKE_dtrtrs(LAPACK_ROW_MAJOR, 'L', 'N', 'N',
+                           n_t, n_shortlist, gp.L_data.data(), n_t,
+                           v.data(), n_shortlist);
+
+            // Compute exact LCB for shortlist
+            std::vector<double> lcb_scores(n_shortlist);
+            for (int s = 0; s < n_shortlist; ++s) {
+                double sv2 = 0;
+                for (int i = 0; i < n_t; ++i)
+                    sv2 += v[i * n_shortlist + s] * v[i * n_shortlist + s];
+                double std_val = std::sqrt(std::max(scale - sv2, 0.0));
+                double mu_j = log_mu_norm[shortlist[s]];
+                if (d_penalty > 0 && win_hi > 0) {
+                    double D_val = static_cast<double>(candidates[shortlist[s]].size());
+                    mu_j += d_penalty * (D_val / win_hi);
+                }
+                lcb_scores[s] = mu_j - kappa * std_val;
+            }
+
+            // Sort shortlist by exact LCB ascending
+            std::vector<int> lcb_order(n_shortlist);
             std::iota(lcb_order.begin(), lcb_order.end(), 0);
             std::sort(lcb_order.begin(), lcb_order.end(),
                       [&](int a, int b) { return lcb_scores[a] < lcb_scores[b]; });
 
-            // Precompute Ks column norms for cosine similarity
-            std::vector<double> ks_col_norm(n_cand, 0.0);
-            for (int j = 0; j < n_cand; ++j) {
+            // Precompute Ks_short column norms for cosine diversity
+            std::vector<double> ks_col_norm(n_shortlist, 0.0);
+            for (int s = 0; s < n_shortlist; ++s) {
                 double sq = 0;
-                for (int i = 0; i < gp.n_train; ++i) {
-                    double val = Ks[i * n_cand + j];
+                for (int i = 0; i < n_t; ++i) {
+                    double val = Ks_short[i * n_shortlist + s];
                     sq += val * val;
                 }
-                ks_col_norm[j] = std::sqrt(sq);
+                ks_col_norm[s] = std::sqrt(sq);
             }
 
-            // Greedy top-k selection with cosine diversity filter on Ks columns
-            int n_pick = std::min(n_thompson_samples, n_cand);
-            for (int rank = 0; rank < n_cand && static_cast<int>(selected_indices.size()) < n_pick; ++rank) {
-                int cidx = lcb_order[rank];
+            // Build reverse map: candidate index -> shortlist position
+            std::unordered_map<int,int> cand_to_short;
+            cand_to_short.reserve(n_shortlist);
+            for (int s = 0; s < n_shortlist; ++s)
+                cand_to_short[shortlist[s]] = s;
+
+            // Greedy top-k selection with cosine diversity filter
+            for (int rank = 0; rank < n_shortlist && static_cast<int>(selected_indices.size()) < n_pick; ++rank) {
+                int sidx = lcb_order[rank];  // index into shortlist
+                int cidx = shortlist[sidx];  // index into candidates
                 bool too_similar = false;
                 if (!selected_indices.empty() && diversity_thresh < 1.0) {
-                    double norm_c = ks_col_norm[cidx];
+                    double norm_c = ks_col_norm[sidx];
                     if (norm_c < 1e-12) {
                         // Zero-norm candidate: accept (maximally different)
                     } else {
-                        for (int prev : selected_indices) {
-                            double norm_p = ks_col_norm[prev];
+                        for (int prev_cidx : selected_indices) {
+                            auto it = cand_to_short.find(prev_cidx);
+                            if (it == cand_to_short.end()) continue;
+                            int prev_sidx = it->second;
+                            double norm_p = ks_col_norm[prev_sidx];
                             if (norm_p < 1e-12) continue;
                             double dot = 0;
-                            for (int i = 0; i < gp.n_train; ++i)
-                                dot += Ks[i * n_cand + cidx] * Ks[i * n_cand + prev];
+                            for (int i = 0; i < n_t; ++i)
+                                dot += Ks_short[i * n_shortlist + sidx] * Ks_short[i * n_shortlist + prev_sidx];
                             double cosine = dot / (norm_c * norm_p);
                             if (cosine > diversity_thresh) {
                                 too_similar = true;
@@ -3206,9 +3035,17 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
         bool found_solution = false;
 
         // Phase A: parallel decompose
+        int n_cand_total = static_cast<int>(candidates.size());
         std::vector<GrayCode> sel_circuits(n_sel);
-        for (int si = 0; si < n_sel; ++si)
-            sel_circuits[si] = candidates[selected_indices[si]].copy();
+        for (int si = 0; si < n_sel; ++si) {
+            int idx = selected_indices[si];
+            if (idx < 0 || idx >= n_cand_total) {
+                std::cerr << "BUG: selected_indices[" << si << "]=" << idx
+                          << " out of range [0," << n_cand_total << ")" << std::endl;
+                std::abort();
+            }
+            sel_circuits[si] = candidates[idx].copy();
+        }
 
         std::vector<DecompResult> dec_results;
         parallel_decompose_batch(sel_circuits, dec_results);
@@ -3221,7 +3058,6 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
             decompose_time += dec_results[si].elapsed;
             decompose_count++;
 
-            ssk_cache.register_circuit(candidates[sel_idx]);
             y.push_back(new_score);
             all_params.push_back(new_params);
             X.push_back(candidates[sel_idx].copy());

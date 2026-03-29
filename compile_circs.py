@@ -8,15 +8,15 @@ import time
 
 import numpy as np
 from qiskit import QuantumCircuit
-from squander import N_Qubit_Decomposition_Surrogate_GateLevel, utils
+from squander import N_Qubit_Decomposition_Surrogate, Qiskit_IO, utils
 
-CIRCS_DIR = "circs"
+CIRCS_DIR = "circs_qasm2"
+OUTPUT_DIR = "compiled_circs"
 RESULTS_CSV = "compilation_results_qmill.csv"
 TOLERANCE = 1e-8
 
 
-OPTIMIZER_CONFIG_BH = {
-    # Local optimizer + basin hopping
+OPTIMIZER_CONFIG = {
     'optimizer': 'BFGS2',
     'parallel': 2,
     'tolerance': TOLERANCE,
@@ -30,33 +30,25 @@ OPTIMIZER_CONFIG_BH = {
     # Bitmask: RZ=bit3, X=bit5, SX=bit12 → (1<<3)|(1<<5)|(1<<12) = 4136
     'gate_1q_gateset': 4136,
     # Surrogate search params
-    'kappa': 0.1,                   # LCB exploration weight
-    'X0_size': 150,                  # initial random samples per D level
-    'candidates_per_iter': 250,     # candidates generated per iteration
-    'n_thompson_samples': 50,       # candidates evaluated per iteration
-    'local_search_fraction': 0.5,   # fraction of candidates refined by local search
-    'max_local_steps': 30,          # local search steps per candidate
-    'window_patience': 25,          # iterations without >1% improvement before moving to next D
-    'window_max_iters': 500,         # hard cap on iterations per window
-    'd_window_width': 2,            # search 2 adjacent D values per window
-    'max_consecutive_stagnations': 5, # skip ahead after 3 fruitless windows
-    'gp_max_train': 1000,            # max GP training points (sparse subset selection)
-    'topk_diversity_threshold': 0.95, # Thompson sampling diversity filter
+    'kappa': 0.5,
+    'X0_size': 150,
+    'candidates_per_iter': 1500,
+    'n_thompson_samples': 500,  # top-k candidates selected via LCB + diversity
+    'local_search_fraction': 0.5,
+    'max_local_steps': 30,
+    'local_search_positions': 5,       # sampled positions per local search step
+    'local_search_gp_subset': 50,      # lightweight GP training subset for local search
+    'window_max_iters': 500,
+    'stagnation_window': 10,
+    'stagnation_improvement_frac': 0.01,
+    'window_patience': 75,             # hard patience cap (fallback)
+    'gp_max_train': 300,
+    'topk_diversity_threshold': 0.95,
     # SSK kernel params
     'ssk_gap_decay': 0.8,
     'ssk_match_decay': 0.8,
     'ssk_order': 3,
-    # Rollback config (more patient, fine-grained)
-    'rb_kappa': 0.03,
-    'rb_window_patience': 250,
-    'rb_window_max_iters': 2000,
-    'rb_candidates_per_iter': 500,
-    'rb_n_thompson_samples': 50,
-    'rb_local_search_fraction': 0.85,
-    'rb_max_local_steps': 75,
 }
-
-OPTIMIZER_CONFIG = OPTIMIZER_CONFIG_BH
 
 
 TWO_QUBIT_GATES = {'CNOT', 'CZ', 'CH', 'CU', 'CP', 'CR', 'CRX', 'CRY', 'CRZ',
@@ -80,12 +72,14 @@ def main():
         print(f"No QASM files found in {CIRCS_DIR}/")
         return
 
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
     # Write CSV header
     write_header = not os.path.exists(RESULTS_CSV)
     if write_header:
         with open(RESULTS_CSV, 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(['circuit', 'qubits', 'two_qbit_original', 'two_qbit_compiled',
+            writer.writerow(['circuit', 'qubits', 'two_qbit_original', 'two_qbit_compiled', 'gate_num_compiled',
                              'compilation_time_s', 'error'])
 
     for qasm_file in qasm_files:
@@ -103,7 +97,7 @@ def main():
         config = dict(OPTIMIZER_CONFIG)
         config['level_limit'] = two_qbit_original
         config['parallel'] = 2
-        decomp = N_Qubit_Decomposition_Surrogate_GateLevel(np.ascontiguousarray(Umtx.conj().T), config=config)
+        decomp = N_Qubit_Decomposition_Surrogate(np.ascontiguousarray(Umtx.conj().T), config=config)
         decomp.set_Verbose(0)
         decomp.set_Optimizer(config['optimizer'])
         decomp.set_Cost_Function_Variant(3)
@@ -114,22 +108,24 @@ def main():
         elapsed = time.time() - t0
 
         best_score = decomp.get_Decomposition_Error()
-        # Count CNOTs by capturing List_Gates C++ stdout
-        saved_fd = os.dup(1)
-        with tempfile.TemporaryFile(mode='w+b') as tmp:
-            os.dup2(tmp.fileno(), 1)
-            decomp.List_Gates()
-            os.dup2(saved_fd, 1)
-            os.close(saved_fd)
-            tmp.seek(0)
-            listing = tmp.read().decode('utf-8', errors='replace')
-        two_qbit_compiled = listing.count(': CNOT ')
+        circ = decomp.get_Circuit()
+        params = decomp.get_Optimized_Parameters()
+        gate_num = circ.get_Gate_Nums()
+        two_qbit_compiled = gate_num.get('CNOT',0)
+        gate_num_compiled = sum([x for x in gate_num.values()])
+        print(f"  Compiled 2-qubit gates: {two_qbit_compiled}, Total gate count: {gate_num_compiled}, Error: {best_score:.2e}, Time: {elapsed:.1f}s")
 
-        print(f"  Compiled 2-qubit gates: {two_qbit_compiled}, Error: {best_score:.2e}, Time: {elapsed:.1f}s")
+        # Save compiled circuit as QASM
+        qc = Qiskit_IO.get_Qiskit_Circuit(circ, params)
+        out_path = os.path.join(OUTPUT_DIR, os.path.splitext(name)[0] + "_compiled.qasm")
+        from qiskit.qasm2 import dump as qasm2_dump
+        with open(out_path, 'w') as qf:
+            qasm2_dump(qc, qf)
+        print(f"  Saved: {out_path}")
 
         with open(RESULTS_CSV, 'a', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow([name, N, two_qbit_original, two_qbit_compiled, f"{elapsed:.2f}", f"{best_score:.2e}"])
+            writer.writerow([name, N, two_qbit_original, two_qbit_compiled, gate_num_compiled, f"{elapsed:.2f}", f"{best_score:.2e}"])
 
     print(f"\nResults saved to {RESULTS_CSV}")
 

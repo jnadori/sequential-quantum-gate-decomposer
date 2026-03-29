@@ -275,25 +275,13 @@ protected:
     int gp_max_train;  // max training points for GP (0 = unlimited)
     int d_seed_budget;  // max D-1 circuits seeded into GP at D transition (default 50)
 
-    // D-window config
-    int d_window_width;
-    int base_window_width;
+    // Per-D search config
     int window_patience;
     int window_max_iters;
-    int max_consecutive_stagnations;
 
     // Best-so-far plateau stagnation detection
     int stagnation_window;              // lookback window for best-so-far plateau check (default 5)
     double stagnation_improvement_frac; // required relative improvement in best (default 0.01)
-
-    // Rollback-phase overrides (used during narrowing after solution found)
-    double rb_kappa;
-    int rb_window_patience;
-    int rb_window_max_iters;
-    int rb_candidates_per_iter;
-    int rb_n_thompson_samples;
-    double rb_local_search_fraction;
-    int rb_max_local_steps;
 
     // Adaptive kappa (exploration-exploitation scheduling)
     bool adaptive_kappa;
