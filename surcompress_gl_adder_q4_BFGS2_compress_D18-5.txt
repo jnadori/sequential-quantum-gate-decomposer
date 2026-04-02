@@ -1,0 +1,116 @@
+SurCompress (C++ top-down): N=4, D=18 down to 5, kappa=0.5
+---
+
+Initial circuit: D=18
+Initial score: 7.32747e-15 (D=18)
+
+=== D=18 skipped (solution at D=18, score=7.32747e-15) ===
+
+=== D=17 Phase 1: trying 18 single-gate removals (from D=18 best, score=7.32747e-15) ===
+SOLUTION found by single-gate removal at D=17, score=1.2936e-10
+
+=== D=16 Phase 1: trying 17 single-gate removals (from D=17 best, score=1.2936e-10) ===
+SOLUTION found by single-gate removal at D=16, score=1.9565e-11
+
+=== D=15 Phase 1: trying 15 single-gate removals (from D=16 best, score=1.9565e-11) ===
+SOLUTION found by single-gate removal at D=15, score=1.75813e-10
+
+=== D=14 Phase 1: trying 15 single-gate removals (from D=15 best, score=1.75813e-10) ===
+SOLUTION found by single-gate removal at D=14, score=8.77629e-11
+
+=== D=13 Phase 1: trying 14 single-gate removals (from D=14 best, score=8.77629e-11) ===
+SOLUTION found by single-gate removal at D=13, score=1.55163e-10
+
+=== D=12 Phase 1: trying 13 single-gate removals (from D=13 best, score=1.55163e-10) ===
+SOLUTION found by single-gate removal at D=12, score=1.29579e-11
+
+=== D=11 Phase 1: trying 12 single-gate removals (from D=12 best, score=1.29579e-11) ===
+SOLUTION found by single-gate removal at D=11, score=8.16651e-11
+
+=== D=10 Phase 1: trying 11 single-gate removals (from D=11 best, score=8.16651e-11) ===
+
+=== D=10 (shrink-seeded: 32, random-seeded: 450) ===
+SOLUTION found during seeding at D=10, score=3.87417e-11
+
+=== D=9 Phase 1: trying 9 single-gate removals (from D=10 best, score=3.87417e-11) ===
+
+=== D=9 (shrink-seeded: 150, random-seeded: 450) ===
+SOLUTION found during seeding at D=9, score=5.26457e-12
+
+=== D=8 Phase 1: trying 7 single-gate removals (from D=9 best, score=5.26457e-12) ===
+
+=== D=8 (shrink-seeded: 150, random-seeded: 450) ===
+Window [8,8]: 607 existing + 0 new samples, total data=975
+  Iter 0: best=0.146447 (D=8) evals=1100 kappa=0.5 rho=0.106 n_train=956 n_filtered=956 n_sel=125 [gp=0.17s cand=2.2s acq=0.32s dec=3.8s]
+  Iter 1: best=0.146447 (D=8) evals=1225 kappa=0.499 rho=0.125 n_train=1081 n_filtered=1081 n_sel=125 [gp=0.37s cand=2.2s acq=0.36s dec=4s]
+  Iter 2: best=0.146447 (D=8) evals=1350 kappa=0.499 rho=0.0907 n_train=1206 n_filtered=1206 n_sel=125 [gp=0.36s cand=2.5s acq=0.31s dec=3.7s]
+  Iter 3: best=0.146447 (D=8) evals=1475 kappa=0.498 rho=-0.0182 n_train=1331 n_filtered=1331 n_sel=125 [gp=0.51s cand=2.1s acq=0.32s dec=3.8s]
+  Iter 4: best=0.146447 (D=8) evals=1600 kappa=0.498 rho=0.162 n_train=1456 n_filtered=1456 n_sel=125 [gp=0.84s cand=2.3s acq=0.33s dec=3.6s]
+  Iter 5: best=0.146447 (D=8) evals=1725 kappa=0.497 rho=0.109 n_train=1581 n_filtered=1581 n_sel=125 [gp=0.94s cand=2.1s acq=0.36s dec=3.6s]
+  Iter 6: best=0.146447 (D=8) evals=1850 kappa=0.497 rho=0.032 n_train=1706 n_filtered=1706 n_sel=125 [gp=1.1s cand=2.3s acq=0.37s dec=3.8s]
+  Iter 7: best=0.146447 (D=8) evals=1975 kappa=0.496 rho=0.0923 n_train=1831 n_filtered=1831 n_sel=125 [gp=1.4s cand=2.3s acq=0.38s dec=3.5s]
+  Iter 8: best=0.146447 (D=8) evals=2100 kappa=0.496 rho=0.0741 n_train=1956 n_filtered=1956 n_sel=125 [gp=1.5s cand=2.4s acq=0.45s dec=3.8s]
+  Iter 9: best=0.146447 (D=8) evals=2225 kappa=0.495 rho=0.229 n_train=1118 n_filtered=2081 n_sel=125 [gp=0.4s cand=1.3s acq=0.25s dec=3.4s]
+  Iter 10: best=0.146447 (D=8) evals=2350 kappa=0.495 rho=0.0171 n_train=1118 n_filtered=2206 n_sel=125 [gp=0.26s cand=1.1s acq=0.22s dec=3.6s]
+  Iter 11: best=0.146447 (D=8) evals=2475 kappa=0.494 rho=-0.0543 n_train=1118 n_filtered=2331 n_sel=125 [gp=0.22s cand=1.1s acq=0.23s dec=3.5s]
+  Iter 12: best=0.146447 (D=8) evals=2600 kappa=0.494 rho=0.0846 n_train=1118 n_filtered=2456 n_sel=125 [gp=0.26s cand=1.1s acq=0.23s dec=3.8s]
+  Iter 13: best=0.146447 (D=8) evals=2725 kappa=0.493 rho=0.229 n_train=1118 n_filtered=2581 n_sel=125 [gp=0.22s cand=0.99s acq=0.23s dec=3.5s]
+  Iter 14: best=0.146447 (D=8) evals=2850 kappa=0.493 rho=0.179 n_train=1118 n_filtered=2706 n_sel=125 [gp=0.26s cand=1.1s acq=0.22s dec=3.6s]
+  Iter 15: best=0.146447 (D=8) evals=2975 kappa=0.492 rho=0.293 n_train=1118 n_filtered=2831 n_sel=125 [gp=0.26s cand=0.99s acq=0.21s dec=3.8s]
+  Iter 16: best=0.146447 (D=8) evals=3100 kappa=0.492 rho=0.188 n_train=1118 n_filtered=2956 n_sel=125 [gp=0.26s cand=0.98s acq=0.21s dec=3.5s]
+  Iter 17: best=0.146447 (D=8) evals=3225 kappa=0.491 rho=0.215 n_train=1118 n_filtered=3081 n_sel=125 [gp=0.22s cand=1s acq=0.23s dec=3.8s]
+  Iter 18: best=0.146447 (D=8) evals=3350 kappa=0.491 rho=0.147 n_train=1118 n_filtered=3206 n_sel=125 [gp=0.23s cand=1.1s acq=0.24s dec=3.7s]
+  Iter 19: best=0.146447 (D=8) evals=3475 kappa=0.49 rho=0.33 n_train=1118 n_filtered=3331 n_sel=125 [gp=0.31s cand=0.99s acq=0.23s dec=3.9s]
+  Iter 20: best=0.146447 (D=8) evals=3600 kappa=0.49 rho=0.257 n_train=1118 n_filtered=3456 n_sel=125 [gp=0.27s cand=0.98s acq=0.2s dec=3.5s]
+  Iter 21: best=0.146447 (D=8) evals=3725 kappa=0.489 rho=0.315 n_train=1118 n_filtered=3581 n_sel=125 [gp=0.27s cand=0.89s acq=0.21s dec=3.6s]
+  Iter 22: best=0.146447 (D=8) evals=3850 kappa=0.489 rho=0.271 n_train=1118 n_filtered=3706 n_sel=125 [gp=0.23s cand=0.96s acq=0.21s dec=3.5s]
+  Iter 23: best=0.146447 (D=8) evals=3975 kappa=0.488 rho=0.324 n_train=1118 n_filtered=3831 n_sel=125 [gp=0.28s cand=0.96s acq=0.24s dec=3.8s]
+  Iter 24: best=0.146447 (D=8) evals=4100 kappa=0.488 rho=0.344 n_train=1118 n_filtered=3956 n_sel=125 [gp=0.27s cand=1.1s acq=0.21s dec=3.8s]
+  Iter 25: best=0.146447 (D=8) evals=4225 kappa=0.487 rho=0.343 n_train=1118 n_filtered=4081 n_sel=125 [gp=0.28s cand=0.91s acq=0.24s dec=3.9s]
+  Iter 26: best=0.146447 (D=8) evals=4350 kappa=0.497 rho=0.141 n_train=1118 n_filtered=4206 n_sel=125 [gp=0.37s cand=1s acq=0.23s dec=3.9s]
+  Iter 27: best=0.146447 (D=8) evals=4475 kappa=0.506 rho=0.085 n_train=1118 n_filtered=4331 n_sel=125 [gp=0.29s cand=1s acq=0.22s dec=4s]
+  Iter 28: best=0.146447 (D=8) evals=4600 kappa=0.516 rho=0.102 n_train=1118 n_filtered=4456 n_sel=125 [gp=0.32s cand=1.1s acq=0.27s dec=3.7s]
+  Iter 29: best=0.146447 (D=8) evals=4725 kappa=0.525 rho=0.198 n_train=1118 n_filtered=4581 n_sel=125 [gp=0.29s cand=0.94s acq=0.24s dec=4s]
+  Iter 30: best=0.146447 (D=8) evals=4850 kappa=0.535 rho=0.231 n_train=1118 n_filtered=4706 n_sel=125 [gp=0.24s cand=1.2s acq=0.26s dec=3.9s]
+  Iter 31: best=0.146447 (D=8) evals=4975 kappa=0.544 rho=0.0992 n_train=1118 n_filtered=4831 n_sel=125 [gp=0.22s cand=0.95s acq=0.21s dec=3.6s]
+  Iter 32: best=0.146447 (D=8) evals=5100 kappa=0.554 rho=0.116 n_train=1118 n_filtered=4956 n_sel=125 [gp=0.33s cand=0.97s acq=0.26s dec=3.7s]
+  Iter 33: best=0.146447 (D=8) evals=5225 kappa=0.564 rho=0.0511 n_train=1118 n_filtered=5081 n_sel=125 [gp=0.31s cand=0.98s acq=0.25s dec=3.9s]
+  Iter 34: best=0.146447 (D=8) evals=5350 kappa=0.573 rho=0.132 n_train=1118 n_filtered=5206 n_sel=125 [gp=0.28s cand=0.89s acq=0.21s dec=3.6s]
+  Iter 35: best=0.146447 (D=8) evals=5475 kappa=0.583 rho=0.0503 n_train=1118 n_filtered=5331 n_sel=125 [gp=0.23s cand=0.8s acq=0.25s dec=3.4s]
+  Iter 36: best=0.146447 (D=8) evals=5600 kappa=0.592 rho=0.0809 n_train=1118 n_filtered=5456 n_sel=125 [gp=0.28s cand=0.83s acq=0.22s dec=3.6s]
+  Iter 37: best=0.146447 (D=8) evals=5725 kappa=0.601 rho=0.051 n_train=1118 n_filtered=5581 n_sel=125 [gp=0.33s cand=0.85s acq=0.22s dec=4s]
+  Iter 38: best=0.146447 (D=8) evals=5850 kappa=0.611 rho=0.299 n_train=1118 n_filtered=5706 n_sel=125 [gp=0.31s cand=0.9s acq=0.23s dec=4.1s]
+  Iter 39: best=0.146447 (D=8) evals=5975 kappa=0.621 rho=0.197 n_train=1118 n_filtered=5831 n_sel=125 [gp=0.27s cand=0.94s acq=0.23s dec=3.5s]
+  Iter 40: best=0.146447 (D=8) evals=6100 kappa=0.63 rho=0.29 n_train=1118 n_filtered=5956 n_sel=125 [gp=0.28s cand=0.81s acq=0.21s dec=3.5s]
+  Iter 41: best=0.146447 (D=8) evals=6225 kappa=0.639 rho=0.0704 n_train=1118 n_filtered=6081 n_sel=125 [gp=0.33s cand=0.87s acq=0.21s dec=3.5s]
+  Iter 42: best=0.146447 (D=8) evals=6350 kappa=0.649 rho=0.19 n_train=1118 n_filtered=6206 n_sel=125 [gp=0.24s cand=0.85s acq=0.29s dec=3.7s]
+  Iter 43: best=0.146447 (D=8) evals=6475 kappa=0.658 rho=0.132 n_train=1118 n_filtered=6331 n_sel=125 [gp=0.32s cand=0.88s acq=0.26s dec=4.2s]
+  Iter 44: best=0.146447 (D=8) evals=6600 kappa=0.668 rho=0.214 n_train=1118 n_filtered=6456 n_sel=125 [gp=0.25s cand=1s acq=0.24s dec=3.8s]
+  Iter 45: best=0.146447 (D=8) evals=6725 kappa=0.677 rho=0.155 n_train=1118 n_filtered=6581 n_sel=125 [gp=0.26s cand=0.96s acq=0.3s dec=3.7s]
+  Iter 46: best=0.146447 (D=8) evals=6850 kappa=0.687 rho=0.0694 n_train=1118 n_filtered=6706 n_sel=125 [gp=0.33s cand=0.77s acq=0.24s dec=3.8s]
+  Iter 47: best=0.146447 (D=8) evals=6975 kappa=0.697 rho=0.113 n_train=1118 n_filtered=6831 n_sel=125 [gp=0.3s cand=0.85s acq=0.22s dec=3.7s]
+  Iter 48: best=0.146447 (D=8) evals=7100 kappa=0.706 rho=0.214 n_train=1118 n_filtered=6956 n_sel=125 [gp=0.29s cand=0.8s acq=0.23s dec=3.6s]
+  Iter 49: best=0.146447 (D=8) evals=7225 kappa=0.716 rho=0.14 n_train=1118 n_filtered=7081 n_sel=125 [gp=0.24s cand=0.86s acq=0.22s dec=3.6s]
+  Patience stagnation after 50 iters
+Stagnation at D=8, retrying with fresh random seeds...
+Window [8,8]: 7307 existing + 0 new samples, total data=7675
+  Iter 0: best=0.146447 (D=8) evals=7800 kappa=0.5 rho=-0.0117 n_train=1118 n_filtered=7656 n_sel=125 [gp=0.17s cand=1s acq=0.21s dec=3.8s]
+  Iter 1: best=0.146447 (D=8) evals=7925 kappa=0.499 rho=0.168 n_train=1118 n_filtered=7781 n_sel=125 [gp=0.55s cand=0.93s acq=0.26s dec=3.7s]
+  Iter 2: best=0.146447 (D=8) evals=8050 kappa=0.499 rho=0.208 n_train=1118 n_filtered=7906 n_sel=125 [gp=0.3s cand=0.81s acq=0.21s dec=3.6s]
+  Iter 3: best=0.146447 (D=8) evals=8175 kappa=0.498 rho=0.0929 n_train=1118 n_filtered=8031 n_sel=125 [gp=0.27s cand=0.89s acq=0.24s dec=3.8s]
+  Iter 4: best=0.146447 (D=8) evals=8300 kappa=0.498 rho=0.196 n_train=1118 n_filtered=8156 n_sel=125 [gp=0.3s cand=0.8s acq=0.23s dec=3.8s]
+  Iter 5: best=0.146447 (D=8) evals=8425 kappa=0.497 rho=0.261 n_train=1118 n_filtered=8281 n_sel=125 [gp=0.27s cand=0.75s acq=0.21s dec=3.5s]
+  Iter 6: best=0.146447 (D=8) evals=8550 kappa=0.497 rho=0.288 n_train=1118 n_filtered=8406 n_sel=125 [gp=0.22s cand=0.76s acq=0.19s dec=3.4s]
+  Iter 7: best=0.146447 (D=8) evals=8675 kappa=0.496 rho=0.0363 n_train=1118 n_filtered=8531 n_sel=125 [gp=0.28s cand=0.78s acq=0.23s dec=3.4s]
+  Iter 8: best=0.146447 (D=8) evals=8800 kappa=0.496 rho=0.0134 n_train=1118 n_filtered=8656 n_sel=125 [gp=0.23s cand=0.81s acq=0.23s dec=3.5s]
+  Iter 9: best=0.146447 (D=8) evals=8925 kappa=0.527 rho=0.0923 n_train=1118 n_filtered=8781 n_sel=125 [gp=0.27s cand=0.79s acq=0.21s dec=3.5s]
+  Iter 10: best=0.146447 (D=8) evals=9050 kappa=0.557 rho=0.0799 n_train=1118 n_filtered=8906 n_sel=125 [gp=0.22s cand=0.94s acq=0.22s dec=3.6s]
+  Iter 11: best=0.146447 (D=8) evals=9175 kappa=0.588 rho=0.141 n_train=1118 n_filtered=9031 n_sel=125 [gp=0.28s cand=0.77s acq=0.21s dec=3.8s]
+  Iter 12: best=0.146447 (D=8) evals=9300 kappa=0.619 rho=0.226 n_train=1118 n_filtered=9156 n_sel=125 [gp=0.27s cand=0.79s acq=0.21s dec=3.8s]
+  Iter 13: best=0.146447 (D=8) evals=9425 kappa=0.65 rho=0.0128 n_train=1118 n_filtered=9281 n_sel=125 [gp=0.23s cand=0.74s acq=0.21s dec=3.3s]
+  Iter 14: best=0.146447 (D=8) evals=9550 kappa=0.68 rho=0.0889 n_train=1118 n_filtered=9406 n_sel=125 [gp=0.29s cand=0.82s acq=0.22s dec=3.7s]
+  Iter 15: best=0.146447 (D=8) evals=9675 kappa=0.711 rho=0.0153 n_train=1118 n_filtered=9531 n_sel=125 [gp=0.23s cand=0.72s acq=0.19s dec=3.6s]
+  Patience stagnation after 16 iters
+Stopping compression: stagnation at D=8
+
+Compression complete: best=5.26457e-12 (D=9) total_evals=9675 time=548.557s

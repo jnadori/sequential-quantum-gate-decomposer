@@ -1,5 +1,5 @@
-"""Compile QASM circuits using C++ N_Qubit_Decomposition_Surrogate.
-Compression-only: loads target circuit and top-down compresses it."""
+"""Compile QASM circuits from circs/ using C++ N_Qubit_Decomposition_Surrogate_GateLevel.
+Two-phase: bottom-up search with dense R+Rz+CROT, then top-down compression."""
 
 import csv
 import glob
@@ -8,11 +8,12 @@ import time
 
 import numpy as np
 from qiskit import QuantumCircuit
-from squander import N_Qubit_Decomposition_Surrogate, Qiskit_IO, utils
+import quasar
+from squander import N_Qubit_Decomposition_Surrogate_GateLevel, Qiskit_IO, utils
 
-CIRCS_DIR = "benchmarks/IBM"
-OUTPUT_DIR = "compiled_circs"
-RESULTS_CSV = "compilation_results_qmill.csv"
+CIRCS_DIR = "circs_qasm2"
+OUTPUT_DIR = "compiled_circs_gl"
+RESULTS_CSV = "compilation_results_gl.csv"
 TOLERANCE = 1e-8
 
 
@@ -26,9 +27,6 @@ OPTIMIZER_CONFIG = {
     'bh_interval': 94,
     'bh_target_accept_rate': 0.5661497388955112,
     'bh_stepwise_factor': 0.5557762288919466,
-    # IBM Eagle native gateset: {RZ, SX, X, CX}
-    # Bitmask: RZ=bit3, X=bit5, SX=bit12 → (1<<3)|(1<<5)|(1<<12) = 4136
-    'gate_1q_gateset': 4136,
     # Surrogate search params
     'kappa': 0.5,
     'X0_size': 150,
@@ -81,14 +79,14 @@ def main():
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # Write CSV header
     write_header = not os.path.exists(RESULTS_CSV)
     if write_header:
         with open(RESULTS_CSV, 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(['circuit', 'qubits', 'two_qbit_original',
-                             'two_qbit_compressed', 'gate_num_compiled',
-                             'time_s', 'error'])
+                             'two_qbit_search', 'two_qbit_compressed',
+                             'gate_num_compiled', 'search_time_s', 'compress_time_s',
+                             'error'])
 
     for qasm_file in qasm_files:
         name = os.path.basename(qasm_file)
@@ -107,32 +105,51 @@ def main():
         config['parallel'] = 2
         project = os.path.splitext(name)[0] + '_' + config['optimizer']
 
-        # Load target circuit and transpile to CNOT+U3 basis via Qiskit (optimization_level=0)
-        from qiskit import transpile
-        qc = QuantumCircuit.from_qasm_file(qasm_file)
-        qc_basis = transpile(qc, basis_gates=['u3', 'cx'], optimization_level=0)
-        orig_circ, orig_params = Qiskit_IO.convert_Qiskit_to_Squander(qc_basis)
+        # Star topology: qubit 0 is hub, connected to all others
+        star_topology = [(i, 0) for i in range(1, N)]
 
-        # Compression with loaded circuit
-        decomp = N_Qubit_Decomposition_Surrogate(np.ascontiguousarray(Umtx.conj().T), config=config)
+        # Phase 1: Bottom-up search
+        print("  Phase 1: Bottom-up search...")
+        decomp = N_Qubit_Decomposition_Surrogate_GateLevel(
+            np.ascontiguousarray(Umtx.conj().T), topology=star_topology, config=config)
         decomp.set_Verbose(0)
         decomp.set_Optimizer(config['optimizer'])
         decomp.set_Cost_Function_Variant(3)
-        decomp.set_Project_Name(project + '_compress')
-        decomp.set_Gate_Structure(orig_circ)
-        decomp.set_Optimized_Parameters(orig_params)
+        decomp.set_Project_Name(project)
 
         t0 = time.time()
         decomp.Start_Decomposition()
-        elapsed = time.time() - t0
+        search_time = time.time() - t0
 
-        best_score = decomp.get_Decomposition_Error()
-        circ = decomp.get_Circuit()
-        params = decomp.get_Optimized_Parameters()
+        search_score = decomp.get_Decomposition_Error()
+        search_circ = decomp.get_Circuit()
+        search_params = decomp.get_Optimized_Parameters()
+        search_gate_num = search_circ.get_Gate_Nums()
+        two_qbit_search = search_gate_num.get('CROT', 0)
+        print(f"  Search result: {two_qbit_search} CROTs, Error: {search_score:.2e}, Time: {search_time:.1f}s")
+
+        # Phase 2: Top-down compression
+        print("  Phase 2: Top-down compression...")
+        decomp2 = N_Qubit_Decomposition_Surrogate_GateLevel(
+            np.ascontiguousarray(Umtx.conj().T), topology=star_topology, config=config)
+        decomp2.set_Verbose(0)
+        decomp2.set_Optimizer(config['optimizer'])
+        decomp2.set_Cost_Function_Variant(3)
+        decomp2.set_Project_Name(project + '_compress')
+        decomp2.set_Gate_Structure(search_circ)
+        decomp2.set_Optimized_Parameters(search_params)
+
+        t0 = time.time()
+        decomp2.Start_Decomposition()
+        compress_time = time.time() - t0
+
+        best_score = decomp2.get_Decomposition_Error()
+        circ = decomp2.get_Circuit()
+        params = decomp2.get_Optimized_Parameters()
         gate_num = circ.get_Gate_Nums()
-        two_qbit_compiled = gate_num.get('CNOT', 0)
+        two_qbit_compiled = gate_num.get('CROT', 0)
         gate_num_compiled = sum(gate_num.values())
-        print(f"  Result: {two_qbit_compiled} CNOTs, Total: {gate_num_compiled}, Error: {best_score:.2e}, Time: {elapsed:.1f}s")
+        print(f"  Compressed: {two_qbit_compiled} CROTs, Total: {gate_num_compiled}, Error: {best_score:.2e}, Time: {compress_time:.1f}s")
 
         # Save compiled circuit as QASM
         qc = Qiskit_IO.get_Qiskit_Circuit(circ, params)
@@ -144,8 +161,8 @@ def main():
 
         with open(RESULTS_CSV, 'a', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow([name, N, two_qbit_original, two_qbit_compiled,
-                             gate_num_compiled, f"{elapsed:.2f}",
+            writer.writerow([name, N, two_qbit_original, two_qbit_search, two_qbit_compiled,
+                             gate_num_compiled, f"{search_time:.2f}", f"{compress_time:.2f}",
                              f"{best_score:.2e}"])
 
     print(f"\nResults saved to {RESULTS_CSV}")

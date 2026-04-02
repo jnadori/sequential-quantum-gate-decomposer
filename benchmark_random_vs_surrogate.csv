@@ -1,0 +1,2 @@
+circuit,qubits,two_qbit_original,two_qbit_surrogate,error_surrogate,time_surrogate,two_qbit_random,error_random,time_random
+3_17_13.qasm,3,9,7,1.19e-12,5.08,8,2.39e-12,9.20

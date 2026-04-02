@@ -1,0 +1,10 @@
+circuit,qubits,synth_method,two_qbit_original,two_qbit_compiled,gate_num_compiled,gate_counts,compilation_time_s
+3_17_13.qasm,3,qsearch,9,8,27,"CROTGate:8, U3Gate:19",6.86
+3_17_13.qasm,3,qsearch,9,8,27,"CROTGate:8, U3Gate:19",5.79
+3_17_13.qasm,3,qsearch,9,9,30,"CROTGate:9, U3Gate:21",15.37
+adder_q4.qasm,4,leap,8,14,46,"CROTGate:14, U3Gate:32",9.90
+mul_q5.qasm,5,leap,12,17,56,"CROTGate:17, U3Gate:39",238.28
+qft4.qasm,4,leap,14,21,67,"CROTGate:21, U3Gate:46",43.55
+tfim-4-80.qasm,4,leap,18,20,64,"CROTGate:20, U3Gate:44",37.28
+3_17_13.qasm,3,qsearch,9,8,27,"CROTGate:8, U3Gate:19",7.47
+adder_q4.qasm,4,qsearch,8,9,31,"CROTGate:9, U3Gate:22",366.76

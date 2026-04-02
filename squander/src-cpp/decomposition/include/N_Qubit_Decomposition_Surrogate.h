@@ -59,6 +59,10 @@ int LAPACKE_dpotrf(int matrix_layout, char uplo, int n,
 int LAPACKE_dtrtrs(int matrix_layout, char uplo, char trans, char diag,
                    int n, int nrhs, const double* A, int LDA,
                    double* B, int LDB);
+int LAPACKE_dtrtri(int matrix_layout, char uplo, char diag, int n,
+                   double* A, int LDA);
+int LAPACKE_dsteqr(int matrix_layout, char compz, int n,
+                   double* d, double* e, double* z, int ldz);
 void cblas_dgemm(int Order, int TransA, int TransB,
                  int M, int N, int K,
                  double alpha, const double* A, int lda,
@@ -163,6 +167,11 @@ public:
     std::vector<double> inv_L_diag;  // 1.0 / L[i,i] for diagonal variance approximation
     int n_train;
 
+    // LOVE (Lanczos Variance Estimates) precomputed state
+    std::vector<double> R_love;  // n_train x love_rank, row-major. K^{-1} ~ R*R^T
+    int love_rank;               // Lanczos iterations (0 = disabled)
+    bool love_valid;             // true if R_love is consistent with current L_data
+
     GPRegressor();
 
     /// Fit GP on training data. train_indices index into ssk_cache.
@@ -186,12 +195,23 @@ public:
                                    int n, const double* y,
                                    double test_log_scale, double test_noise);
 
+    /// Compute negative LML and analytical gradient jointly.
+    /// Returns NLL; fills grad_out[2] with {dNLL/d(log_scale), dNLL/d(log_noise)}.
+    double log_marginal_likelihood_with_grad(
+        SSKCache& cache, const int* train_indices, int n, const double* y,
+        double test_log_scale, double test_noise, double* grad_out);
+
     /// Optimize hyperparameters (log_scale, noise) via grid search.
     void optimize_hyperparameters(SSKCache& cache, const int* train_indices,
                                   int n, const double* y,
                                   int n_restarts,
                                   const std::pair<double,double>& scale_bounds,
                                   const std::pair<double,double>& noise_bounds);
+
+    /// Precompute LOVE (Lanczos Variance Estimates) for fast variance predictions.
+    /// Must be called after fit() or fit_incremental(). Builds a low-rank factor R
+    /// such that K^{-1} ~ R*R^T. Variance prediction becomes O(n*r) per candidate.
+    void compute_love(int rank);
 
     double get_scale() const { return std::exp(log_scale); }
 };
@@ -239,7 +259,9 @@ protected:
     std::vector<int> token_masks;                  // bitmask per token (1 bit for 1q, 2 for CNOT)
     std::vector<std::vector<int>> token_neighbors; // tokens sharing at least one qubit
 
-    // OSR data (using existing C++ infrastructure)
+    // OSR data (using existing C++ infrastructure) — disabled when has_custom_topology
+    bool has_custom_topology;
+    int config_D_start;  // user-specified D_start (-1 = use OSR)
     std::vector<std::vector<int>> osr_cuts;
     std::vector<int> osr_cut_bounds;
     std::vector<std::vector<int>> osr_cut_crossing_edges;
@@ -269,10 +291,10 @@ protected:
     int local_search_positions;   // max positions to sample per local search step (0 = all)
     int local_search_gp_subset;   // training subset size for lightweight GP in local search (0 = full)
     int n_thompson_samples;
-    double diversity_thresh;
     double d_penalty;
     int enum_threshold;
     int gp_max_train;  // max training points for GP (0 = unlimited)
+    double diversity_thresh;  // kernel similarity threshold for Thompson Sampling diversity (default 0.95)
     int d_seed_budget;  // max D-1 circuits seeded into GP at D transition (default 50)
 
     // Per-D search config
@@ -294,6 +316,14 @@ protected:
 
     // Random baseline mode (bypasses GP/Thompson sampling)
     bool use_random_candidates;
+
+    // BOSS acquisition-guided GA
+    bool use_boss_ga;                // enable BOSS mode (default false)
+    int boss_pop_size;               // GA population size (default 200)
+    int boss_generations;            // GA generations per outer iteration (default 10)
+    double boss_offspring_ratio;     // offspring/population ratio (default 2.0)
+    int acquisition_function_type;   // 0=LCB, 1=Expected Improvement (default 0)
+
 
     // Timing
     double decompose_time;
@@ -331,8 +361,17 @@ public:
     /// Surrogate-assisted evolutionary search for a single D
     void search_over_D_evolve(int D, const std::string& log_file);
 
-    /// Cross-D surrogate search from D_min to D_max (uses sliding D window)
+    /// Cross-D surrogate search from D_min to D_max (bottom-up)
     void search_over_D_range(int D_min, int D_max, const std::string& log_file);
+
+    /// Top-down compression from D_start down to D_min
+    void compress_over_D_range(int D_start, int D_min, const std::string& log_file,
+                               const GrayCode& initial_skeleton,
+                               Gates_block* imported_gate_structure,
+                               const Matrix_real& imported_params);
+
+    /// Extract CNOT/CROT skeleton from imported gate structure as a GrayCode
+    GrayCode extract_skeleton_from_gates();
 
     /// Result codes for per-window search
     enum WindowResult { WINDOW_SUCCESS, WINDOW_STAGNATION, WINDOW_BUDGET };
@@ -343,7 +382,8 @@ public:
         SSKCache& cache, GrayCodeSet& seen,
         std::vector<GrayCode>& X, std::vector<double>& y,
         std::vector<Matrix_real>& all_params,
-        const std::string& log_file);
+        const std::string& log_file,
+        int patience_override = -1);
 
     // ---- Circuit evaluation ----
 
@@ -359,6 +399,9 @@ public:
 
     /// Thread-safe decompose variant that takes an external RNG
     virtual std::pair<double, Matrix_real> decompose_with_rng(const GrayCode& circuit, std::mt19937& local_gen);
+
+    /// Thread-safe decompose using provided initial parameters instead of random
+    std::pair<double, Matrix_real> decompose_with_initial_params(const GrayCode& circuit, const Matrix_real& initial_params);
 
     /// Parallel decompose a batch of circuits using TBB (respects 'parallel' config)
     void parallel_decompose_batch(const std::vector<GrayCode>& circuits, std::vector<DecompResult>& results);
@@ -377,6 +420,32 @@ public:
     /// Sort key for canonical ordering: (type, qubit1, qubit2)
     /// U3 tokens: (0, qubit, -1). CNOT tokens: (1, target, control).
     virtual std::tuple<int,int,int> token_sort_key(int token) const;
+
+    // ---- Incremental canonical DAG for point mutations ----
+
+    /// Cached DAG structure for incremental canonical form updates
+    struct CanonicalDAG {
+        std::vector<std::vector<int>> adj;   // adjacency list (n elements)
+        std::vector<int> in_degree;          // in-degree per position
+        std::vector<int> masks;              // bitmask per position
+        int n;                               // sequence length
+    };
+
+    /// Build a CanonicalDAG from a sequence. O(D^2).
+    CanonicalDAG build_canonical_dag(const GrayCode& seq);
+
+    /// Run topological sort on an existing DAG. O(D log D).
+    /// The seq must reflect the current token at each position.
+    GrayCode canonical_form_from_dag(const CanonicalDAG& dag, const GrayCode& seq);
+
+    /// Update DAG in-place for a single position change. O(D).
+    /// Modifies adj, in_degree, and masks for the new token at pos.
+    void update_dag_point_mutation(CanonicalDAG& dag, int pos, int old_token, int new_token);
+
+    /// Canonicalize and validate a point mutation using cached DAG.
+    /// Applies mutation, computes canonical form, restores DAG, validates.
+    GrayCode canonicalize_and_validate_from_dag(
+        CanonicalDAG& dag, const GrayCode& seq, int pos, int new_token);
 
     // ---- Validation and canonicalization ----
 
@@ -434,6 +503,21 @@ public:
     // ---- Acquisition ----
 
     double lcb(double mu, double std_val) const { return mu - kappa * std_val; }
+
+    /// Expected Improvement acquisition function (negated so lower = better)
+    double expected_improvement(double mu, double std_val, double y_best) const;
+
+    /// BOSS acquisition-guided GA: optimizes acquisition via evolutionary search
+    void boss_acquisition_ga(
+        const std::vector<GrayCode>& seed_circuits,
+        const double* scores, int n_seeds,
+        int pop_size, int n_generations,
+        SSKCache& cache, GPRegressor& gp, double scale,
+        const std::vector<int>& train_indices, int n_train,
+        double y_best_norm,
+        GrayCodeSet& seen,
+        std::vector<GrayCode>& candidates_out,
+        int D_min_gen = -1, int D_max_gen = -1);
 
     // ---- Standalone SSK Gram matrix ----
 

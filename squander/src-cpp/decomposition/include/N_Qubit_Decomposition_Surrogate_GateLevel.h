@@ -16,10 +16,8 @@ limitations under the License.
 
 /*! \file N_Qubit_Decomposition_Surrogate_GateLevel.h
     \brief Header file for gate-level surrogate search.
-    Searches over CROT skeletons (edge tokens) and tries two fixed 1q gate
-    patterns per skeleton during evaluation:
-      Pattern A: R(target)-Rz(target)-R(control)-Rz(control)-CROT
-      Pattern B: Rz(target)-R(control)-Rz(control)-CROT
+    Searches over CROT skeletons (edge tokens) with dense 1q gates:
+      R(target)-Rz(target)-R(control)-Rz(control)-CROT per layer.
 */
 
 #ifndef N_Qubit_Decomposition_Surrogate_GateLevel_H
@@ -32,12 +30,6 @@ class N_Qubit_Decomposition_Surrogate_GateLevel
     : public N_Qubit_Decomposition_Surrogate {
 
 public:
-    /// Per-CNOT-layer pattern: 1q gates on target and control qubits
-    struct GatePattern {
-        std::vector<gate_type> target_gates;
-        std::vector<gate_type> control_gates;
-    };
-
     /// Constructor with topology
     N_Qubit_Decomposition_Surrogate_GateLevel(Matrix Umtx_in, int qbit_num_in,
         std::vector<matrix_base<int>> topology_in,
@@ -51,27 +43,15 @@ public:
 
     virtual ~N_Qubit_Decomposition_Surrogate_GateLevel();
 
-    /// Main entry point — edge-based skeleton search + pattern trial evaluation
+    /// Main entry point — edge-based skeleton search
     void start_decomposition() override;
 
-    /// Override: tries multiple 1q gate patterns per skeleton, returns best
+    /// Override: builds dense R+Rz gate structure and optimizes
     std::pair<double, Matrix_real> decompose_with_rng(
         const GrayCode& circuit, std::mt19937& local_gen) override;
 
-    /// Build the two fixed 1q-gate patterns (called once from constructor)
-    void build_pattern_library();
-
-    /// Build gate structure using a specific pattern assignment (one pattern index per edge)
-    Gates_block* construct_gate_structure_with_patterns(
-        const GrayCode& gcode, const std::vector<int>& pattern_indices,
-        bool finalize = true);
-
-protected:
-    /// Library of per-CNOT-layer gate patterns
-    std::vector<GatePattern> pattern_library;
-
-    /// Pattern assignment from the last decompose_with_rng call (used by start_decomposition)
-    std::vector<int> last_best_pattern;
+    /// Build gate structure with dense 1q gates (R+Rz on target and control per CROT)
+    Gates_block* construct_gate_structure(const GrayCode& gcode, bool finalize = true);
 };
 
 
