@@ -253,102 +253,46 @@ N_Qubit_Decomposition_Surrogate::N_Qubit_Decomposition_Surrogate(
     boss_offspring_ratio = 2.0;
     acquisition_function_type = 0;  // 0=LCB, 1=EI
 
+    // Helper lambdas to extract config values safely
+    auto get_dbl = [&](const std::string& key, double& var) {
+        if (config.count(key)) config[key].get_property(var);
+    };
+    auto get_int = [&](const std::string& key, auto& var) {
+        if (config.count(key)) {
+            long long v; config[key].get_property(v);
+            var = static_cast<std::remove_reference_t<decltype(var)>>(v);
+        }
+    };
+
     // Override from config
-    if (config.count("kappa") > 0) {
-        double v; config["kappa"].get_property(v); kappa = v;
-    }
-    if (config.count("tolerance") > 0) {
-        double v; config["tolerance"].get_property(v); tolerance = v;
-    }
-    if (config.count("max_sur_iters") > 0) {
-        long long v; config["max_sur_iters"].get_property(v); max_iters = static_cast<int>(v);
-    }
-    if (config.count("patience") > 0) {
-        long long v; config["patience"].get_property(v); patience = static_cast<int>(v);
-    }
-    if (config.count("X0_size") > 0) {
-        long long v; config["X0_size"].get_property(v); X0_size = static_cast<int>(v);
-    }
-    if (config.count("candidates_per_iter") > 0) {
-        long long v; config["candidates_per_iter"].get_property(v);
-        candidates_per_iter = static_cast<int>(v);
-    }
-    if (config.count("tournament_size") > 0) {
-        long long v; config["tournament_size"].get_property(v);
-        tournament_size = static_cast<int>(v);
-    }
-    if (config.count("block_mutation_size") > 0) {
-        long long v; config["block_mutation_size"].get_property(v);
-        block_size = static_cast<int>(v);
-    }
-    if (config.count("local_search_fraction") > 0) {
-        double v; config["local_search_fraction"].get_property(v);
-        local_search_fraction = v;
-    }
-    if (config.count("max_local_steps") > 0) {
-        long long v; config["max_local_steps"].get_property(v);
-        max_local_steps = static_cast<int>(v);
-    }
-    if (config.count("local_search_positions") > 0) {
-        long long v; config["local_search_positions"].get_property(v);
-        local_search_positions = static_cast<int>(v);
-    }
-    if (config.count("local_search_gp_subset") > 0) {
-        long long v; config["local_search_gp_subset"].get_property(v);
-        local_search_gp_subset = static_cast<int>(v);
-    }
-    if (config.count("n_thompson_samples") > 0) {
-        long long v; config["n_thompson_samples"].get_property(v);
-        n_thompson_samples = static_cast<int>(v);
-    }
-    if (config.count("d_penalty") > 0) {
-        double v; config["d_penalty"].get_property(v); d_penalty = v;
-    }
-    if (config.count("enum_threshold") > 0) {
-        long long v; config["enum_threshold"].get_property(v);
-        enum_threshold = static_cast<int>(v);
-    }
-    if (config.count("window_patience") > 0) {
-        long long v; config["window_patience"].get_property(v);
-        window_patience = static_cast<int>(v);
-    }
-    if (config.count("window_max_iters") > 0) {
-        long long v; config["window_max_iters"].get_property(v);
-        window_max_iters = static_cast<int>(v);
-    }
-    if (config.count("gp_max_train") > 0) {
-        long long v; config["gp_max_train"].get_property(v);
-        gp_max_train = static_cast<int>(v);
-    }
-    if (config.count("topk_diversity_threshold") > 0) {
-        double v; config["topk_diversity_threshold"].get_property(v);
-        diversity_thresh = v;
-    }
-    if (config.count("d_seed_budget") > 0) {
-        long long v; config["d_seed_budget"].get_property(v);
-        d_seed_budget = static_cast<int>(v);
-    }
-    if (config.count("stagnation_window") > 0) {
-        long long v; config["stagnation_window"].get_property(v);
-        stagnation_window = static_cast<int>(v);
-    }
-    if (config.count("stagnation_improvement_frac") > 0) {
-        double v; config["stagnation_improvement_frac"].get_property(v);
-        stagnation_improvement_frac = v;
-    }
-    if (config.count("ssk_gap_decay") > 0) {
-        double v; config["ssk_gap_decay"].get_property(v); sur_gap_decay = v;
-    }
-    if (config.count("ssk_match_decay") > 0) {
-        double v; config["ssk_match_decay"].get_property(v); sur_match_decay = v;
-    }
-    if (config.count("ssk_order") > 0) {
-        long long v; config["ssk_order"].get_property(v); sur_ssk_order = static_cast<int>(v);
-    }
-    if (config.count("D_start") > 0) {
-        long long v; config["D_start"].get_property(v);
-        config_D_start = static_cast<int>(v);
-    }
+    get_dbl("kappa",kappa);
+    get_dbl("tolerance",tolerance);
+    get_int("max_sure_iters",max_iters);
+    get_int("patience",patience);
+    get_int("candidates_per_iter",candidates_per_iter);
+    get_int("tournament_size",tournament_size);
+    get_int("block_mutation_size",block_size);
+    get_dbl("local_search_fraction",local_search_fraction);
+    get_int("max_local_steps",max_local_steps);
+    get_int("local_search_positions",local_search_positions);
+    get_int("local_search_gp_subset",local_search_gp_subset);
+    get_int("n_thompson_samples",n_thompson_samples);
+    get_dbl("d_penalty",d_penalty);
+    get_int("enum_threshold",enum_threshold);
+    get_int("window_patience",window_patience);
+    get_int("window_max_iters",window_max_iters);
+    get_int("gp_max_train",gp_max_train);
+    get_dbl("topk_diversity_threshold",diversity_thresh);
+    get_int("d_seed_budget",d_seed_budget);
+    get_int("stagnation_window",stagnation_window);
+    get_dbl("stagnation_improvement_frac",stagnation_improvement_frac);
+    get_dbl("ssk_gap_decay",sur_gap_decay);
+    get_dbl("ssk_match_decay",sur_match_decay);
+    get_int("ssk_order",sur_ssk_order);
+    get_int("D_start",config_D_start);
+
+
+
     if (config.count("use_random_candidates") > 0) {
         long long v; config["use_random_candidates"].get_property(v);
         use_random_candidates = static_cast<bool>(v);
@@ -358,43 +302,18 @@ N_Qubit_Decomposition_Surrogate::N_Qubit_Decomposition_Surrogate(
         long long v; config["adaptive_kappa"].get_property(v);
         adaptive_kappa = static_cast<bool>(v);
     }
-    if (config.count("kappa_decay_rate") > 0) {
-        double v; config["kappa_decay_rate"].get_property(v);
-        kappa_decay_rate = v;
-    }
-    if (config.count("kappa_stagnation_boost") > 0) {
-        double v; config["kappa_stagnation_boost"].get_property(v);
-        kappa_stagnation_boost = v;
-    }
-    if (config.count("position_guided_fraction") > 0) {
-        double v; config["position_guided_fraction"].get_property(v);
-        position_guided_fraction = v;
-    }
-    if (config.count("position_lambda") > 0) {
-        double v; config["position_lambda"].get_property(v);
-        position_lambda = v;
-    }
+    get_dbl("kappa_decay_rate",kappa_decay_rate);
+    get_dbl("kappa_stagnation_boost",kappa_stagnation_boost);
+    get_dbl("position_guided_fraction",position_guided_fraction);
+    get_dbl("position_lambda",position_lambda);
     if (config.count("use_boss_ga") > 0) {
         long long v; config["use_boss_ga"].get_property(v);
         use_boss_ga = static_cast<bool>(v);
     }
-    if (config.count("boss_pop_size") > 0) {
-        long long v; config["boss_pop_size"].get_property(v);
-        boss_pop_size = static_cast<int>(v);
-    }
-    if (config.count("boss_generations") > 0) {
-        long long v; config["boss_generations"].get_property(v);
-        boss_generations = static_cast<int>(v);
-    }
-    if (config.count("boss_offspring_ratio") > 0) {
-        double v; config["boss_offspring_ratio"].get_property(v);
-        boss_offspring_ratio = v;
-    }
-    if (config.count("acquisition_function") > 0) {
-        long long v; config["acquisition_function"].get_property(v);
-        acquisition_function_type = static_cast<int>(v);
-    }
-
+    get_int("boss_pop_size",boss_pop_size);
+    get_int("boss_generations",boss_generations);
+    get_int("acquisition_function",acquisition_function_type);
+    get_dbl("boss_offspring_ratio",boss_offspring_ratio);
     // Edge-only tokenization (gate-based mode is in the GateLevel subclass)
     n_1q_types = 0;
     n_1q_tokens = 0;
