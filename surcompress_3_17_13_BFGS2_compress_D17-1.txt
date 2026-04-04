@@ -1,0 +1,115 @@
+SurCompress (C++ top-down): N=3, D=17 down to 1, kappa=2
+---
+
+Initial circuit: D=17
+Initial score: 1.77636e-15 (D=17)
+
+=== D=17 skipped (solution at D=17, score=1.77636e-15) ===
+
+=== D=16 Phase 1: trying 16 single-gate removals (from D=17 best, score=1.77636e-15) ===
+SOLUTION found by single-gate removal at D=16, score=6.23745e-12
+
+=== D=15 Phase 1: trying 15 single-gate removals (from D=16 best, score=6.23745e-12) ===
+SOLUTION found by single-gate removal at D=15, score=3.38207e-12
+
+=== D=14 Phase 1: trying 15 single-gate removals (from D=15 best, score=3.38207e-12) ===
+SOLUTION found by single-gate removal at D=14, score=7.67275e-13
+
+=== D=13 Phase 1: trying 14 single-gate removals (from D=14 best, score=7.67275e-13) ===
+SOLUTION found by single-gate removal at D=13, score=2.38043e-12
+
+=== D=12 Phase 1: trying 13 single-gate removals (from D=13 best, score=2.38043e-12) ===
+SOLUTION found by single-gate removal at D=12, score=1.2027e-12
+
+=== D=11 Phase 1: trying 12 single-gate removals (from D=12 best, score=1.2027e-12) ===
+SOLUTION found by single-gate removal at D=11, score=1.59084e-12
+
+=== D=10 Phase 1: trying 11 single-gate removals (from D=11 best, score=1.59084e-12) ===
+SOLUTION found by single-gate removal at D=10, score=1.94633e-11
+
+=== D=9 Phase 1: trying 10 single-gate removals (from D=10 best, score=1.94633e-11) ===
+SOLUTION found by single-gate removal at D=9, score=4.80449e-12
+
+=== D=8 Phase 1: trying 9 single-gate removals (from D=9 best, score=4.80449e-12) ===
+SOLUTION found by single-gate removal at D=8, score=1.05872e-11
+
+=== D=7 Phase 1: trying 8 single-gate removals (from D=8 best, score=1.05872e-11) ===
+
+=== D=7 (shrink-seeded: 0, random-seeded: 30) ===
+Window [7,7]: 38 existing + 0 new samples, total data=48
+  Iter 0: best=0.0669873 (D=7) evals=71 kappa=2 rho=0.0277 n_train=40 n_filtered=40 n_sel=23 [gp=0.0032s cand=0.013s acq=0.099s dec=0.21s]
+  Iter 1: best=0.0669873 (D=7) evals=96 kappa=2 rho=0.0354 n_train=63 n_filtered=63 n_sel=25 [gp=0.00098s cand=0.011s acq=0.091s dec=0.094s]
+  Iter 2: best=0.0669873 (D=7) evals=123 kappa=2 rho=0.558 n_train=88 n_filtered=88 n_sel=27 [gp=0.0015s cand=0.0094s acq=0.094s dec=0.12s]
+  Iter 3: best=0.0669873 (D=7) evals=149 kappa=1.99 rho=0.605 n_train=115 n_filtered=115 n_sel=26 [gp=0.0025s cand=0.012s acq=0.081s dec=0.13s]
+  Iter 4: best=0.0669873 (D=7) evals=176 kappa=1.99 rho=0.593 n_train=141 n_filtered=141 n_sel=27 [gp=0.0034s cand=0.018s acq=0.085s dec=0.13s]
+  Iter 5: best=0.0669873 (D=7) evals=203 kappa=1.99 rho=0.616 n_train=168 n_filtered=168 n_sel=27 [gp=0.0046s cand=0.017s acq=0.085s dec=0.14s]
+  Iter 6: SOLUTION at D=7, score=1.53577e-11 [cand=0.03s dec=0.85s]
+
+=== D=6 Phase 1: trying 7 single-gate removals (from D=7 best, score=1.53577e-11) ===
+
+=== D=6 (shrink-seeded: 10, random-seeded: 30) ===
+Window [6,6]: 47 existing + 0 new samples, total data=300
+  Iter 0: best=0.0669873 (D=6) evals=319 kappa=2 rho=0.167 n_train=291 n_filtered=291 n_sel=19 [gp=0.016s cand=0.034s acq=0.054s dec=0.096s]
+  Iter 1: best=0.0669873 (D=6) evals=338 kappa=2 rho=0.488 n_train=310 n_filtered=310 n_sel=19 [gp=0.027s cand=0.026s acq=0.05s dec=0.094s]
+  Iter 2: best=0.0669873 (D=6) evals=357 kappa=2 rho=0.547 n_train=329 n_filtered=329 n_sel=19 [gp=0.03s cand=0.03s acq=0.049s dec=0.11s]
+  Iter 3: best=0.0669873 (D=6) evals=376 kappa=1.99 rho=0.675 n_train=348 n_filtered=348 n_sel=19 [gp=0.023s cand=0.033s acq=0.051s dec=0.097s]
+  Iter 4: best=0.0669873 (D=6) evals=395 kappa=1.99 rho=0.689 n_train=367 n_filtered=367 n_sel=19 [gp=0.035s cand=0.028s acq=0.049s dec=0.091s]
+  Iter 5: best=0.0669873 (D=6) evals=413 kappa=1.99 rho=0.517 n_train=386 n_filtered=386 n_sel=18 [gp=0.037s cand=0.029s acq=0.046s dec=0.085s]
+  Iter 6: best=0.0669873 (D=6) evals=643 kappa=1.99 rho=0.475 n_train=404 n_filtered=404 n_sel=230 [gp=0.04s cand=0.034s acq=0.0096s dec=0.68s]
+  Iter 7: best=0.0669873 (D=6) evals=841 kappa=1.99 rho=0.476 n_train=634 n_filtered=634 n_sel=198 [gp=0.13s cand=0.053s acq=0.016s dec=0.7s]
+  Iter 8: best=0.0669873 (D=6) evals=1056 kappa=1.98 rho=0.555 n_train=832 n_filtered=832 n_sel=215 [gp=0.24s cand=0.076s acq=0.019s dec=0.68s]
+  Iter 9: best=0.0669873 (D=6) evals=1249 kappa=1.98 rho=0.464 n_train=1047 n_filtered=1047 n_sel=193 [gp=0.42s cand=0.11s acq=0.026s dec=0.58s]
+  Iter 10: best=0.0669873 (D=6) evals=1463 kappa=1.98 rho=0.338 n_train=1240 n_filtered=1240 n_sel=214 [gp=0.63s cand=0.15s acq=0.028s dec=0.7s]
+  Iter 11: best=0.0669873 (D=6) evals=1675 kappa=1.98 rho=0.354 n_train=1454 n_filtered=1454 n_sel=212 [gp=0.95s cand=0.26s acq=0.034s dec=0.72s]
+  Iter 12: best=0.0669873 (D=6) evals=1869 kappa=1.98 rho=0.235 n_train=1666 n_filtered=1666 n_sel=194 [gp=1.4s cand=0.35s acq=0.037s dec=0.66s]
+  Iter 13: best=0.0669873 (D=6) evals=2040 kappa=1.97 rho=0.199 n_train=1860 n_filtered=1860 n_sel=171 [gp=1.9s cand=0.47s acq=0.038s dec=0.51s]
+  Iter 14: best=0.0669873 (D=6) evals=2186 kappa=1.97 rho=0.0891 n_train=1039 n_filtered=2031 n_sel=146 [gp=0.3s cand=0.2s acq=0.016s dec=0.45s]
+  Iter 15: best=0.0669873 (D=6) evals=2314 kappa=1.97 rho=0.00615 n_train=1041 n_filtered=2177 n_sel=128 [gp=0.3s cand=0.22s acq=0.014s dec=0.41s]
+  Iter 16: best=0.0669873 (D=6) evals=2415 kappa=1.97 rho=-0.179 n_train=1041 n_filtered=2305 n_sel=101 [gp=0.3s cand=0.21s acq=0.013s dec=0.32s]
+  Iter 17: best=0.0669873 (D=6) evals=2504 kappa=1.97 rho=-0.264 n_train=1041 n_filtered=2406 n_sel=89 [gp=0.3s cand=0.21s acq=0.01s dec=0.28s]
+  Iter 18: best=0.0669873 (D=6) evals=2582 kappa=1.96 rho=-0.402 n_train=1041 n_filtered=2495 n_sel=78 [gp=0.3s cand=0.2s acq=0.0089s dec=0.28s]
+  Iter 19: best=0.0669873 (D=6) evals=2645 kappa=1.96 rho=-0.425 n_train=1041 n_filtered=2573 n_sel=63 [gp=0.3s cand=0.23s acq=0.0085s dec=0.19s]
+  Iter 20: best=0.0669873 (D=6) evals=2701 kappa=1.96 rho=-0.458 n_train=1041 n_filtered=2636 n_sel=56 [gp=0.3s cand=0.18s acq=0.0066s dec=0.21s]
+  Iter 21: best=0.0669873 (D=6) evals=2757 kappa=1.96 rho=-0.322 n_train=1041 n_filtered=2692 n_sel=56 [gp=0.3s cand=0.21s acq=0.0065s dec=0.21s]
+  Iter 22: best=0.0669873 (D=6) evals=2806 kappa=1.96 rho=-0.445 n_train=1041 n_filtered=2748 n_sel=49 [gp=0.3s cand=0.2s acq=0.0063s dec=0.16s]
+  Iter 23: best=0.0669873 (D=6) evals=2850 kappa=1.95 rho=-0.378 n_train=1041 n_filtered=2797 n_sel=44 [gp=0.3s cand=0.18s acq=0.0059s dec=0.16s]
+  Iter 24: best=0.0669873 (D=6) evals=2891 kappa=1.95 rho=-0.42 n_train=1041 n_filtered=2841 n_sel=41 [gp=0.3s cand=0.21s acq=0.0054s dec=0.14s]
+  Iter 25: best=0.0669873 (D=6) evals=2927 kappa=1.95 rho=-0.342 n_train=1041 n_filtered=2882 n_sel=36 [gp=0.3s cand=0.21s acq=0.0052s dec=0.13s]
+  Iter 26: best=0.0669873 (D=6) evals=2956 kappa=1.99 rho=-0.425 n_train=1041 n_filtered=2918 n_sel=29 [gp=0.3s cand=0.23s acq=0.0048s dec=0.11s]
+  Iter 27: best=0.0669873 (D=6) evals=2978 kappa=2.03 rho=-0.346 n_train=1041 n_filtered=2947 n_sel=22 [gp=0.3s cand=0.21s acq=0.0043s dec=0.11s]
+  Iter 28: best=0.0669873 (D=6) evals=2996 kappa=2.06 rho=-0.0258 n_train=1041 n_filtered=2969 n_sel=18 [gp=0.3s cand=0.19s acq=0.004s dec=0.1s]
+  Iter 29: best=0.0669873 (D=6) evals=3012 kappa=2.1 rho=-0.0971 n_train=1041 n_filtered=2987 n_sel=16 [gp=0.3s cand=0.21s acq=0.0036s dec=0.068s]
+  Iter 30: best=0.0669873 (D=6) evals=3026 kappa=2.14 rho=-0.0901 n_train=1041 n_filtered=3003 n_sel=14 [gp=0.3s cand=0.2s acq=0.0032s dec=0.045s]
+  Iter 31: best=0.0669873 (D=6) evals=3037 kappa=2.18 rho=-0.136 n_train=1041 n_filtered=3017 n_sel=11 [gp=0.3s cand=0.21s acq=0.003s dec=0.034s]
+  Iter 32: best=0.0669873 (D=6) evals=3047 kappa=2.22 rho=-0.176 n_train=1041 n_filtered=3028 n_sel=10 [gp=0.3s cand=0.19s acq=0.0026s dec=0.033s]
+  Iter 33: best=0.0669873 (D=6) evals=3056 kappa=2.25 rho=-0.3 n_train=1041 n_filtered=3038 n_sel=9 [gp=0.3s cand=0.21s acq=0.0022s dec=0.024s]
+  Iter 34: best=0.0669873 (D=6) evals=3066 kappa=2.29 rho=0.297 n_train=1041 n_filtered=3047 n_sel=10 [gp=0.3s cand=0.21s acq=0.0027s dec=0.055s]
+  Iter 35: best=0.0669873 (D=6) evals=3076 kappa=2.33 rho=0.309 n_train=1041 n_filtered=3057 n_sel=10 [gp=0.3s cand=0.19s acq=0.0024s dec=0.03s]
+  Iter 36: best=0.0669873 (D=6) evals=3086 kappa=2.37 rho=-0.212 n_train=1041 n_filtered=3067 n_sel=10 [gp=0.3s cand=0.21s acq=0.0026s dec=0.034s]
+  Iter 37: best=0.0669873 (D=6) evals=3094 kappa=2.41 rho=-0.405 n_train=1041 n_filtered=3077 n_sel=8 [gp=0.3s cand=0.22s acq=0.0028s dec=0.022s]
+  Iter 38: best=0.0669873 (D=6) evals=3102 kappa=2.44 rho=-0.643 n_train=1041 n_filtered=3085 n_sel=8 [gp=0.3s cand=0.21s acq=0.0024s dec=0.026s]
+  Iter 39: best=0.0669873 (D=6) evals=3110 kappa=2.48 rho=-0.381 n_train=1041 n_filtered=3093 n_sel=8 [gp=0.3s cand=0.19s acq=0.0021s dec=0.021s]
+  Iter 40: best=0.0669873 (D=6) evals=3115 kappa=2.52 rho=-0.6 n_train=1041 n_filtered=3101 n_sel=5 [gp=0.3s cand=0.22s acq=0.0025s dec=0.016s]
+  Iter 41: best=0.0669873 (D=6) evals=3119 kappa=2.56 rho=0 n_train=1041 n_filtered=3106 n_sel=4 [gp=0.3s cand=0.18s acq=0.0022s dec=0.015s]
+  Iter 42: best=0.0669873 (D=6) evals=3124 kappa=2.6 rho=0.2 n_train=1041 n_filtered=3110 n_sel=5 [gp=0.3s cand=0.18s acq=0.0023s dec=0.013s]
+  Iter 43: best=0.0669873 (D=6) evals=3129 kappa=2.63 rho=0.1 n_train=1041 n_filtered=3115 n_sel=5 [gp=0.3s cand=0.2s acq=0.0023s dec=0.013s]
+  Iter 44: best=0.0669873 (D=6) evals=3132 kappa=2.67 rho=0 n_train=1041 n_filtered=3120 n_sel=3 [gp=0.3s cand=0.2s acq=0.0024s dec=0.0083s]
+  Iter 45: best=0.0669873 (D=6) evals=3135 kappa=2.71 rho=0 n_train=1041 n_filtered=3123 n_sel=3 [gp=0.3s cand=0.2s acq=0.0019s dec=0.021s]
+  Iter 46: best=0.0669873 (D=6) evals=3138 kappa=2.75 rho=0 n_train=1041 n_filtered=3126 n_sel=3 [gp=0.3s cand=0.18s acq=0.0019s dec=0.012s]
+  Iter 47: best=0.0669873 (D=6) evals=3141 kappa=2.79 rho=0 n_train=1041 n_filtered=3129 n_sel=3 [gp=0.3s cand=0.19s acq=0.0017s dec=0.01s]
+  Iter 48: best=0.0669873 (D=6) evals=3142 kappa=2.82 rho=0 n_train=1041 n_filtered=3132 n_sel=1 [gp=0.3s cand=0.22s acq=0.0019s dec=0.0059s]
+  Iter 49: best=0.0669873 (D=6) evals=3144 kappa=2.86 rho=0 n_train=1041 n_filtered=3133 n_sel=2 [gp=0.3s cand=0.2s acq=0.0019s dec=0.011s]
+  Patience stagnation after 50 iters
+Stagnation at D=6, retrying with fresh random seeds...
+Window [6,6]: 2892 existing + 0 new samples, total data=3145
+  Iter 0: best=0.0669873 (D=6) evals=3146 kappa=2 rho=0 n_train=1041 n_filtered=3136 n_sel=1 [gp=0.31s cand=0.18s acq=0.0015s dec=0.0096s]
+  Iter 1: best=0.0669873 (D=6) evals=3147 kappa=2 rho=0 n_train=1041 n_filtered=3137 n_sel=1 [gp=0.3s cand=0.18s acq=0.0014s dec=0.021s]
+  Iter 2: best=0.0669873 (D=6) evals=3148 kappa=2 rho=0 n_train=1041 n_filtered=3138 n_sel=1 [gp=0.3s cand=0.18s acq=0.0014s dec=0.0059s]
+  Iter 3: best=0.0669873 (D=6) evals=3149 kappa=1.99 rho=0 n_train=1041 n_filtered=3139 n_sel=1 [gp=0.3s cand=0.2s acq=0.0014s dec=0.005s]
+  Iter 4: best=0.0669873 (D=6) evals=3150 kappa=1.99 rho=0 n_train=1041 n_filtered=3140 n_sel=1 [gp=0.3s cand=0.19s acq=0.0014s dec=0.0045s]
+  Iter 5: best=0.0669873 (D=6) evals=3151 kappa=1.99 rho=0 n_train=1041 n_filtered=3141 n_sel=1 [gp=0.3s cand=0.19s acq=0.0014s dec=0.0055s]
+  Iter 6: best=0.0669873 (D=6) evals=3152 kappa=1.99 rho=0 n_train=1041 n_filtered=3142 n_sel=1 [gp=0.3s cand=0.19s acq=0.0014s dec=0.005s]
+  Iter 7: best=0.0669873 (D=6) evals=3152 kappa=1.99 rho=0 n_train=1041 n_filtered=3143 n_sel=0 [gp=0.3s cand=0.2s acq=0.0014s dec=8.2e-07s]
+Stopping compression: stagnation at D=6
+
+Compression complete: best=1.53577e-11 (D=7) total_evals=3152 time=89.5002s

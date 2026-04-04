@@ -1,0 +1,48 @@
+SurCompress (C++ top-down): N=5, D=31 down to 1, kappa=2
+---
+
+Initial circuit: D=31
+Initial score: 3.77476e-15 (D=31)
+
+=== D=31 skipped (solution at D=31, score=3.77476e-15) ===
+
+=== D=30 Phase 1: trying 28 single-gate removals (from D=31 best, score=3.77476e-15) ===
+SOLUTION found by single-gate removal at D=30, score=7.4906e-11
+
+=== D=29 Phase 1: trying 27 single-gate removals (from D=30 best, score=7.4906e-11) ===
+SOLUTION found by single-gate removal at D=29, score=2.83238e-11
+
+=== D=28 Phase 1: trying 26 single-gate removals (from D=29 best, score=2.83238e-11) ===
+SOLUTION found by single-gate removal at D=28, score=1.45585e-11
+
+=== D=27 Phase 1: trying 25 single-gate removals (from D=28 best, score=1.45585e-11) ===
+SOLUTION found by single-gate removal at D=27, score=4.57945e-12
+
+=== D=26 Phase 1: trying 24 single-gate removals (from D=27 best, score=4.57945e-12) ===
+SOLUTION found by single-gate removal at D=26, score=3.35809e-12
+
+=== D=25 Phase 1: trying 23 single-gate removals (from D=26 best, score=3.35809e-12) ===
+SOLUTION found by single-gate removal at D=25, score=4.30767e-14
+
+=== D=24 Phase 1: trying 22 single-gate removals (from D=25 best, score=4.30767e-14) ===
+SOLUTION found by single-gate removal at D=24, score=1.86707e-11
+
+=== D=23 Phase 1: trying 21 single-gate removals (from D=24 best, score=1.86707e-11) ===
+
+=== D=23 (shrink-seeded: 10, random-seeded: 30) ===
+Window [23,23]: 61 existing + 0 new samples, total data=86
+  Iter 0: SOLUTION at D=23, score=7.21811e-12 [cand=0.33s dec=42.05s]
+
+=== D=22 Phase 1: trying 20 single-gate removals (from D=23 best, score=7.21811e-12) ===
+SOLUTION found by single-gate removal at D=22, score=1.19327e-11
+
+=== D=21 Phase 1: trying 20 single-gate removals (from D=22 best, score=1.19327e-11) ===
+SOLUTION found by single-gate removal at D=21, score=4.54514e-12
+
+=== D=20 Phase 1: trying 19 single-gate removals (from D=21 best, score=4.54514e-12) ===
+SOLUTION found by single-gate removal at D=20, score=7.22089e-13
+
+=== D=19 Phase 1: trying 19 single-gate removals (from D=20 best, score=7.22089e-13) ===
+SOLUTION found by single-gate removal at D=19, score=1.52223e-12
+
+=== D=18 Phase 1: trying 17 single-gate removals (from D=19 best, score=1.52223e-12) ===

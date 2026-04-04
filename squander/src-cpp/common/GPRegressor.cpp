@@ -50,6 +50,7 @@ extern "C" void openblas_set_num_threads(int);
 // ============================================================================
 
 SSKCache::SSKCache() : gap_decay(0.8), match_sq(0.64), order(3),
+                       kernel_type_(0), wl_iterations_(3),
                        size_(0), capacity_(64) {
     K_norm.resize(capacity_ * capacity_, 0.0);
     raw_diags.resize(capacity_, 0.0);
@@ -57,9 +58,84 @@ SSKCache::SSKCache() : gap_decay(0.8), match_sq(0.64), order(3),
 
 SSKCache::SSKCache(double gap_decay_in, double match_decay_in, int order_in)
     : gap_decay(gap_decay_in), match_sq(match_decay_in * match_decay_in),
-      order(order_in), size_(0), capacity_(64) {
+      order(order_in), kernel_type_(0), wl_iterations_(3),
+      size_(0), capacity_(64) {
     K_norm.resize(capacity_ * capacity_, 0.0);
     raw_diags.resize(capacity_, 0.0);
+}
+
+SSKCache::SSKCache(int kernel_type, int wl_iterations,
+                   const std::vector<int>& token_masks,
+                   double gap_decay_in, double match_decay_in, int order_in)
+    : gap_decay(gap_decay_in), match_sq(match_decay_in * match_decay_in),
+      order(order_in), kernel_type_(kernel_type),
+      wl_iterations_(wl_iterations), token_masks_(token_masks),
+      size_(0), capacity_(64) {
+    K_norm.resize(capacity_ * capacity_, 0.0);
+    raw_diags.resize(capacity_, 0.0);
+}
+
+std::unordered_map<size_t, int> SSKCache::compute_wl_features(
+    const int* tokens, int D) const {
+
+    // Build undirected adjacency: edge (i,j) if gates share a qubit
+    std::vector<std::vector<int>> adj(D);
+    for (int i = 0; i < D; ++i) {
+        int mi = token_masks_[tokens[i]];
+        for (int j = i + 1; j < D; ++j) {
+            if (mi & token_masks_[tokens[j]]) {
+                adj[i].push_back(j);
+                adj[j].push_back(i);
+            }
+        }
+    }
+
+    // Initialize labels from token values
+    std::vector<size_t> labels(D);
+    std::unordered_map<size_t, int> features;
+    for (int i = 0; i < D; ++i) {
+        labels[i] = std::hash<int>{}(tokens[i]);
+        features[labels[i]]++;
+    }
+
+    // WL iterations: refine labels based on neighborhood
+    for (int h = 0; h < wl_iterations_; ++h) {
+        std::vector<size_t> new_labels(D);
+        for (int i = 0; i < D; ++i) {
+            // Collect and sort neighbor labels
+            std::vector<size_t> nbr;
+            nbr.reserve(adj[i].size());
+            for (int j : adj[i])
+                nbr.push_back(labels[j]);
+            std::sort(nbr.begin(), nbr.end());
+
+            // Hash combine: (current_label, sorted neighbor labels)
+            size_t combined = labels[i];
+            combined ^= std::hash<size_t>{}(nbr.size()) + 0x9e3779b9
+                         + (combined << 6) + (combined >> 2);
+            for (size_t nl : nbr)
+                combined ^= std::hash<size_t>{}(nl) + 0x9e3779b9
+                             + (combined << 6) + (combined >> 2);
+            new_labels[i] = combined;
+            features[combined]++;
+        }
+        labels = new_labels;
+    }
+
+    return features;
+}
+
+double SSKCache::wl_dot(const std::unordered_map<size_t, int>& f1,
+                        const std::unordered_map<size_t, int>& f2) {
+    double dot = 0.0;
+    const auto& smaller = (f1.size() <= f2.size()) ? f1 : f2;
+    const auto& larger  = (f1.size() <= f2.size()) ? f2 : f1;
+    for (const auto& kv : smaller) {
+        auto it = larger.find(kv.first);
+        if (it != larger.end())
+            dot += static_cast<double>(kv.second) * it->second;
+    }
+    return dot;
 }
 
 void SSKCache::grow_capacity() {
@@ -189,53 +265,75 @@ int SSKCache::register_circuit(const GrayCode& circuit) {
 
     int n_new = static_cast<int>(circuit.size());
 
-    if (new_idx >= capacity_) grow_capacity();
-
-    // Self-kernel
-    double self_raw = single_ssk_raw(circuit.get_data(), n_new,
-                                     circuit.get_data(), n_new);
-    raw_diags[new_idx] = self_raw;
-
-    // Kernel vs all existing circuits, grouped by length
-    std::vector<double> raw_new(new_idx + 1, 0.0);
-    raw_new[new_idx] = self_raw;
-
-    if (new_idx > 0) {
-        // Group existing by length
-        std::map<int, std::vector<int>> len_groups;
-        for (int i = 0; i < new_idx; ++i)
-            len_groups[static_cast<int>(circuits[i].size())].push_back(i);
-
-        for (std::map<int, std::vector<int>>::iterator it = len_groups.begin(); it != len_groups.end(); ++it) {
-            int ulen = it->first;
-            std::vector<int>& indices = it->second;
-            int P = static_cast<int>(indices.size());
-            std::vector<int> ci_flat(P * n_new);
-            std::vector<int> cj_flat(P * ulen);
-
-            for (int p = 0; p < P; ++p) {
-                std::memcpy(&ci_flat[p * n_new], circuit.get_data(),
-                            n_new * sizeof(int));
-                std::memcpy(&cj_flat[p * ulen], circuits[indices[p]].get_data(),
-                            ulen * sizeof(int));
-            }
-
-            std::vector<double> raw_batch(P);
-            batch_ssk_raw(ci_flat.data(), cj_flat.data(), P, n_new, ulen,
-                          raw_batch.data());
-
-            for (int p = 0; p < P; ++p)
-                raw_new[indices[p]] = raw_batch[p];
-        }
+    if (new_idx >= capacity_) {
+        grow_capacity();
+        wl_features_.reserve(capacity_);
     }
 
-    // Normalize and store in K_norm
-    double inv_diag_new = 1.0 / std::sqrt(std::max(raw_new[new_idx], 1e-24));
-    for (int i = 0; i <= new_idx; ++i) {
-        double inv_diag_i = 1.0 / std::sqrt(std::max(raw_diags[i], 1e-24));
-        double norm_val = raw_new[i] * inv_diag_new * inv_diag_i;
-        K_norm[new_idx * capacity_ + i] = norm_val;
-        K_norm[i * capacity_ + new_idx] = norm_val;
+    if (kernel_type_ == 1) {
+        // --- Weisfeiler-Lehman kernel ---
+        auto feat = compute_wl_features(circuit.get_data(), n_new);
+        double self_raw = wl_dot(feat, feat);
+        raw_diags[new_idx] = self_raw;
+
+        std::vector<double> raw_new(new_idx + 1, 0.0);
+        raw_new[new_idx] = self_raw;
+        for (int i = 0; i < new_idx; ++i)
+            raw_new[i] = wl_dot(feat, wl_features_[i]);
+
+        wl_features_.push_back(std::move(feat));
+
+        double inv_diag_new = 1.0 / std::sqrt(std::max(self_raw, 1e-24));
+        for (int i = 0; i <= new_idx; ++i) {
+            double inv_diag_i = 1.0 / std::sqrt(std::max(raw_diags[i], 1e-24));
+            double norm_val = raw_new[i] * inv_diag_new * inv_diag_i;
+            K_norm[new_idx * capacity_ + i] = norm_val;
+            K_norm[i * capacity_ + new_idx] = norm_val;
+        }
+    } else {
+        // --- SSK kernel (existing) ---
+        double self_raw = single_ssk_raw(circuit.get_data(), n_new,
+                                         circuit.get_data(), n_new);
+        raw_diags[new_idx] = self_raw;
+
+        std::vector<double> raw_new(new_idx + 1, 0.0);
+        raw_new[new_idx] = self_raw;
+
+        if (new_idx > 0) {
+            std::map<int, std::vector<int>> len_groups;
+            for (int i = 0; i < new_idx; ++i)
+                len_groups[static_cast<int>(circuits[i].size())].push_back(i);
+
+            for (std::map<int, std::vector<int>>::iterator it = len_groups.begin(); it != len_groups.end(); ++it) {
+                int ulen = it->first;
+                std::vector<int>& indices = it->second;
+                int P = static_cast<int>(indices.size());
+                std::vector<int> ci_flat(P * n_new);
+                std::vector<int> cj_flat(P * ulen);
+
+                for (int p = 0; p < P; ++p) {
+                    std::memcpy(&ci_flat[p * n_new], circuit.get_data(),
+                                n_new * sizeof(int));
+                    std::memcpy(&cj_flat[p * ulen], circuits[indices[p]].get_data(),
+                                ulen * sizeof(int));
+                }
+
+                std::vector<double> raw_batch(P);
+                batch_ssk_raw(ci_flat.data(), cj_flat.data(), P, n_new, ulen,
+                              raw_batch.data());
+
+                for (int p = 0; p < P; ++p)
+                    raw_new[indices[p]] = raw_batch[p];
+            }
+        }
+
+        double inv_diag_new = 1.0 / std::sqrt(std::max(raw_new[new_idx], 1e-24));
+        for (int i = 0; i <= new_idx; ++i) {
+            double inv_diag_i = 1.0 / std::sqrt(std::max(raw_diags[i], 1e-24));
+            double norm_val = raw_new[i] * inv_diag_new * inv_diag_i;
+            K_norm[new_idx * capacity_ + i] = norm_val;
+            K_norm[i * capacity_ + new_idx] = norm_val;
+        }
     }
 
     size_++;
@@ -247,6 +345,35 @@ void SSKCache::compute_cross_kernel(const std::vector<GrayCode>& candidates,
     int n_reg = size_;
     int n_cand = static_cast<int>(candidates.size());
     if (n_reg == 0 || n_cand == 0) return;
+
+    if (kernel_type_ == 1) {
+        // --- WL cross-kernel ---
+        std::vector<std::unordered_map<size_t, int>> cand_feats(n_cand);
+        std::vector<double> cand_self_raw(n_cand);
+
+        tbb::parallel_for(0, n_cand, [&](int c) {
+            cand_feats[c] = compute_wl_features(candidates[c].get_data(),
+                                                static_cast<int>(candidates[c].size()));
+            cand_self_raw[c] = wl_dot(cand_feats[c], cand_feats[c]);
+        });
+
+        std::vector<double> inv_dr(n_reg);
+        for (int r = 0; r < n_reg; ++r)
+            inv_dr[r] = 1.0 / std::sqrt(std::max(raw_diags[r], 1e-24));
+        std::vector<double> inv_dc(n_cand);
+        for (int c = 0; c < n_cand; ++c)
+            inv_dc[c] = 1.0 / std::sqrt(std::max(cand_self_raw[c], 1e-24));
+
+        tbb::parallel_for(0, n_cand, [&](int c) {
+            for (int r = 0; r < n_reg; ++r) {
+                double raw = wl_dot(wl_features_[r], cand_feats[c]);
+                result_out[r * n_cand + c] = scale * raw * inv_dr[r] * inv_dc[c];
+            }
+        });
+        return;
+    }
+
+    // --- SSK cross-kernel (existing) ---
 
     // Group candidates by length
     std::map<int, std::vector<int>> cand_by_len;
@@ -342,6 +469,15 @@ void SSKCache::compute_cross_kernel(const std::vector<GrayCode>& candidates,
 }
 
 double SSKCache::kernel_between(const GrayCode& a, const GrayCode& b) {
+    if (kernel_type_ == 1) {
+        auto fa = compute_wl_features(a.get_data(), static_cast<int>(a.size()));
+        auto fb = compute_wl_features(b.get_data(), static_cast<int>(b.size()));
+        double raw_ab = wl_dot(fa, fb);
+        double raw_aa = wl_dot(fa, fa);
+        double raw_bb = wl_dot(fb, fb);
+        double denom = std::sqrt(std::max(raw_aa, 1e-24) * std::max(raw_bb, 1e-24));
+        return raw_ab / denom;
+    }
     int n1 = static_cast<int>(a.size());
     int n2 = static_cast<int>(b.size());
     double raw_ab = single_ssk_raw(a.get_data(), n1, b.get_data(), n2);
@@ -358,6 +494,31 @@ void SSKCache::compute_cross_kernel_subset(
     int n_sub = static_cast<int>(reg_subset.size());
     int n_cand = static_cast<int>(candidates.size());
     if (n_sub == 0 || n_cand == 0) return;
+
+    std::vector<double> inv_dr(n_sub);
+    for (int s = 0; s < n_sub; ++s)
+        inv_dr[s] = 1.0 / std::sqrt(std::max(raw_diags[reg_subset[s]], 1e-24));
+
+    if (kernel_type_ == 1) {
+        // --- WL cross-kernel ---
+        std::vector<std::unordered_map<size_t, int>> cand_feats(n_cand);
+        std::vector<double> cand_self_raw(n_cand, 0.0);
+        tbb::parallel_for(0, n_cand, [&](int c) {
+            cand_feats[c] = compute_wl_features(candidates[c].get_data(),
+                                                static_cast<int>(candidates[c].size()));
+            cand_self_raw[c] = wl_dot(cand_feats[c], cand_feats[c]);
+        });
+        std::vector<double> inv_dc(n_cand);
+        for (int c = 0; c < n_cand; ++c)
+            inv_dc[c] = 1.0 / std::sqrt(std::max(cand_self_raw[c], 1e-24));
+        for (int s = 0; s < n_sub; ++s)
+            for (int c = 0; c < n_cand; ++c)
+                result_out[s * n_cand + c] = scale *
+                    wl_dot(wl_features_[reg_subset[s]], cand_feats[c]) * inv_dr[s] * inv_dc[c];
+        return;
+    }
+
+    // --- SSK cross-kernel ---
 
     // Map subset position (0..n_sub-1) -> registered index
     // Group subset positions by their circuit length
@@ -444,19 +605,13 @@ void SSKCache::compute_cross_kernel_subset(
     }
 
     // Normalize: result = scale * raw / (sqrt(diag_reg) * sqrt(diag_cand))
-    // Precompute inverse-sqrt factors to avoid repeated sqrt+division
-    std::vector<double> inv_dr(n_sub);
-    for (int s = 0; s < n_sub; ++s)
-        inv_dr[s] = 1.0 / std::sqrt(std::max(raw_diags[reg_subset[s]], 1e-24));
     std::vector<double> inv_dc(n_cand);
     for (int c = 0; c < n_cand; ++c)
         inv_dc[c] = 1.0 / std::sqrt(std::max(cand_self_raw[c], 1e-24));
 
-    for (int s = 0; s < n_sub; ++s) {
-        for (int c = 0; c < n_cand; ++c) {
+    for (int s = 0; s < n_sub; ++s)
+        for (int c = 0; c < n_cand; ++c)
             result_out[s * n_cand + c] = scale * raw_cross[s * n_cand + c] * inv_dr[s] * inv_dc[c];
-        }
-    }
 }
 
 void SSKCache::kernel_matrix(const int* idx1, int n1, const int* idx2, int n2,

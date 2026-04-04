@@ -160,6 +160,7 @@ protected:
     double d_penalty;
     int enum_threshold;
     int gp_max_train;  // max training points for GP (0 = unlimited)
+    double gp_score_ratio;  // fraction of gp_max_train filled by best-by-score (rest: diversity)
     double diversity_thresh;  // kernel similarity threshold for Thompson Sampling diversity (default 0.95)
     int d_seed_budget;  // max D-1 circuits seeded into GP at D transition (default 50)
 
@@ -179,6 +180,7 @@ protected:
     // Position-guided mutations
     double position_guided_fraction;
     double position_lambda;
+    double position_temperature;  // softmax temperature override; -1.0 = use Quarl formula
 
     // Random baseline mode (bypasses GP/Thompson sampling)
     bool use_random_candidates;
@@ -189,6 +191,10 @@ protected:
     int boss_generations;            // GA generations per outer iteration (default 10)
     double boss_offspring_ratio;     // offspring/population ratio (default 2.0)
     int acquisition_function_type;   // 0=LCB, 1=Expected Improvement (default 0)
+
+    // Kernel type for GP surrogate
+    int kernel_type;      // 0=SSK, 1=Weisfeiler-Lehman (default 0)
+    int wl_iterations;    // WL refinement rounds (default 3)
 
 
     // Timing
@@ -364,7 +370,8 @@ public:
                              GrayCodeSet& seen,
                              std::vector<GrayCode>& candidates_out,
                              int& n_local_out, double& avg_steps_out,
-                             int D_min_gen = -1, int D_max_gen = -1);
+                             int D_min_gen = -1, int D_max_gen = -1,
+                             double force_random_fraction = 0.0);
 
     // ---- Acquisition ----
 

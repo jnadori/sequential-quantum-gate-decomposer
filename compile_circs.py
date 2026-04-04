@@ -10,9 +10,9 @@ import numpy as np
 from qiskit import QuantumCircuit
 from squander import N_Qubit_Decomposition_Surrogate, Qiskit_IO, utils
 
-CIRCS_DIR = "benchmarks/IBM"
+CIRCS_DIR = "circs"
 OUTPUT_DIR = "compiled_circs"
-RESULTS_CSV = "compilation_results_qmill.csv"
+RESULTS_CSV = "compilation_results_MQBENCH_WL_EI.csv"
 TOLERANCE = 1e-8
 
 
@@ -30,11 +30,11 @@ OPTIMIZER_CONFIG = {
     # Bitmask: RZ=bit3, X=bit5, SX=bit12 → (1<<3)|(1<<5)|(1<<12) = 4136
     'gate_1q_gateset': 4136,
     # Surrogate search params
-    'kappa': 0.5,
+    'kappa': 2.,
     'X0_size': 150,
-    'candidates_per_iter': 1500,
-    'n_thompson_samples': 125,
-    'topk_diversity_threshold': 0.95,
+    'candidates_per_iter': 250,
+    'n_thompson_samples': 500,
+    'topk_diversity_threshold': 1.,
     'local_search_fraction': 0.5,
     'max_local_steps': 30,
     'local_search_positions': 10,
@@ -48,13 +48,15 @@ OPTIMIZER_CONFIG = {
     'ssk_gap_decay': 0.8,
     'ssk_match_decay': 0.8,
     'ssk_order': 4,
-    'D_start': 5,
+    'D_start': 1,
     # BOSS acquisition-guided GA (set use_boss_ga=1 to enable)
-    'use_boss_ga': 0,
+    'use_boss_ga': 1,
     'boss_pop_size': 200,
     'boss_generations': 10,
     'boss_offspring_ratio': 2.0,
-    'acquisition_function': 0,  # 0=LCB, 1=EI
+    'acquisition_function': 0,  # 0=LCB, 1=EI,
+    'kernel_type':1,
+    'wl_iterations': 5,
 }
 
 

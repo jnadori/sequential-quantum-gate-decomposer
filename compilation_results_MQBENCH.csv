@@ -1,0 +1,17 @@
+circuit,qubits,two_qbit_original,two_qbit_compressed,gate_num_compiled,time_s,error
+adder_n4.qasm,4,10,7,25,198.33,1.93e-11
+basis_change_n3.qasm,3,10,6,21,6.94,1.13e-12
+basis_test_n4.qasm,4,46,8,28,509.99,1.30e-13
+bell_n4.qasm,4,7,5,19,22.62,1.03e-12
+deutsch_n2.qasm,2,1,1,5,0.00,6.66e-16
+dnn_n2.qasm,2,42,3,11,1.38,1.58e-12
+error_correctiond3_n5.qasm,5,49,6,23,624.82,3.48e-12
+fredkin_n3.qasm,3,8,7,24,43.76,1.63e-11
+grover_n2.qasm,2,2,2,8,0.05,1.78e-15
+hs4_n4.qasm,4,4,4,16,0.17,3.55e-15
+iswap_n2.qasm,2,2,2,8,0.05,8.88e-16
+linearsolver_n3.qasm,3,4,4,15,0.31,2.00e-15
+lpn_n5.qasm,5,2,2,11,0.08,4.44e-16
+qaoa_n3.qasm,3,6,4,15,0.55,2.10e-12
+qft_n4.qasm,4,6,10,34,574.52,1.47e-10
+quantumwalks_n2.qasm,2,3,2,8,0.01,5.60e-11

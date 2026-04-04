@@ -90,6 +90,14 @@ public:
     double match_sq;
     int order;
 
+    // Kernel type: 0=SSK (default), 1=Weisfeiler-Lehman
+    int kernel_type_;
+    int wl_iterations_;              // WL refinement rounds (default 3)
+    std::vector<int> token_masks_;   // qubit bitmask per token type
+
+    // Per-registered-circuit WL feature vectors (sparse label histograms)
+    std::vector<std::unordered_map<size_t, int>> wl_features_;
+
     // Registered circuits
     std::vector<GrayCode> circuits;
     GrayCodeMap circuit_to_idx;
@@ -105,6 +113,8 @@ public:
 
     SSKCache();
     SSKCache(double gap_decay_in, double match_decay_in, int order_in);
+    SSKCache(int kernel_type, int wl_iterations, const std::vector<int>& token_masks,
+             double gap_decay_in, double match_decay_in, int order_in);
 
     /// Get or compute the gap decay matrix for length n (n x n, row-major)
     const std::vector<double>& get_D_matrix(int n);
@@ -143,6 +153,11 @@ public:
 
 private:
     void grow_capacity();
+
+    // Weisfeiler-Lehman kernel helpers
+    std::unordered_map<size_t, int> compute_wl_features(const int* tokens, int D) const;
+    static double wl_dot(const std::unordered_map<size_t, int>& f1,
+                         const std::unordered_map<size_t, int>& f2);
 };
 
 
