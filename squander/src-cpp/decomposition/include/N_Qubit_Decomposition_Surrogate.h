@@ -28,6 +28,7 @@ limitations under the License.
 #include "GrayCode.h"
 #include "GrayCodeHash.h"
 #include "n_aryGrayCodeCounter.h"
+#include "GPRegressor.h"
 
 #include <algorithm>
 #include <cmath>
@@ -38,6 +39,7 @@ limitations under the License.
 #include <random>
 #include <set>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -58,6 +60,10 @@ int LAPACKE_dpotrf(int matrix_layout, char uplo, int n,
 int LAPACKE_dtrtrs(int matrix_layout, char uplo, char trans, char diag,
                    int n, int nrhs, const double* A, int LDA,
                    double* B, int LDB);
+int LAPACKE_dtrtri(int matrix_layout, char uplo, char diag, int n,
+                   double* A, int LDA);
+int LAPACKE_dsteqr(int matrix_layout, char compz, int n,
+                   double* d, double* e, double* z, int ldz);
 void cblas_dgemm(int Order, int TransA, int TransB,
                  int M, int N, int K,
                  double alpha, const double* A, int lda,
@@ -75,124 +81,6 @@ void cblas_dgemm(int Order, int TransA, int TransB,
 
 using GrayCodeSet = std::unordered_set<GrayCode, GrayCodeHash>;
 using GrayCodeMap = std::unordered_map<GrayCode, int, GrayCodeHash>;
-
-
-// ---------------------------------------------------------------------------
-// SSKCache — Subsequence String Kernel cache with incremental registration
-// ---------------------------------------------------------------------------
-
-class SSKCache {
-
-public:
-    double gap_decay;
-    double match_sq;
-    int order;
-
-    // Registered circuits
-    std::vector<GrayCode> circuits;
-    GrayCodeMap circuit_to_idx;
-
-    // Gap decay matrices keyed by sequence length
-    std::map<int, std::vector<double>> D_matrices;
-
-    // Dense normalized kernel matrix and raw diagonal values
-    std::vector<double> K_norm;   // capacity * capacity, row-major
-    std::vector<double> raw_diags;
-    int size_;
-    int capacity_;
-
-    SSKCache();
-    SSKCache(double gap_decay_in, double match_decay_in, int order_in);
-
-    /// Get or compute the gap decay matrix for length n (n x n, row-major)
-    const std::vector<double>& get_D_matrix(int n);
-
-    /// Register a circuit, computing kernel values against all existing circuits.
-    /// Returns the index of the circuit.
-    int register_circuit(const GrayCode& circuit);
-
-    /// Compute raw SSK values for P pairs of sequences.
-    /// ci: P*n1 ints (row-major), cj: P*n2 ints (row-major)
-    /// Writes P values into raw_out.
-    void batch_ssk_raw(const int* ci, const int* cj, int P, int n1, int n2,
-                       double* raw_out);
-    /// Compute raw SSK for a single pair of sequences.
-    double single_ssk_raw(const int* a, int n1, const int* b, int n2);
-
-    /// Compute cross-kernel: scale * K_norm_cross of shape (n_registered, n_candidates).
-    /// Result is row-major in result_out (must be pre-allocated).
-    void compute_cross_kernel(const std::vector<GrayCode>& candidates,
-                              double scale, double* result_out);
-
-    /// Compute cross-kernel for a subset of registered circuits only.
-    /// reg_subset: indices into the registered circuits array.
-    /// Result is row-major of shape (n_subset, n_candidates).
-    void compute_cross_kernel_subset(const std::vector<GrayCode>& candidates,
-                                     double scale,
-                                     const std::vector<int>& reg_subset,
-                                     double* result_out);
-
-    /// Compute normalized SSK between two arbitrary circuits.
-    double kernel_between(const GrayCode& a, const GrayCode& b);
-
-    /// Extract sub-matrix: scale * K_norm[idx1, idx2]
-    void kernel_matrix(const int* idx1, int n1, const int* idx2, int n2,
-                       double scale, double* result_out);
-
-private:
-    void grow_capacity();
-};
-
-
-// ---------------------------------------------------------------------------
-// GPRegressor — Gaussian Process with SSK kernel and Cholesky inference
-// ---------------------------------------------------------------------------
-
-class GPRegressor {
-
-public:
-    double log_scale;    // kernel hyperparameter (log of scale)
-    double noise;
-    double jitter;
-
-    // Learned during fit:
-    std::vector<double> L_data;      // Cholesky factor, n_train x n_train row-major
-    std::vector<double> alpha_data;  // K^{-1} y, length n_train
-    std::vector<int> train_indices_; // indices into SSKCache for each training point
-    int n_train;
-
-    GPRegressor();
-
-    /// Fit GP on training data. train_indices index into ssk_cache.
-    void fit(SSKCache& cache, const int* train_indices, int n,
-             const double* y);
-
-    /// Incremental Cholesky update: add new training points without full refactorization.
-    /// old_n is the number of points already in the Cholesky factor L_data.
-    /// The new points are at indices train_indices[old_n..n-1].
-    /// y contains ALL n training targets (old + new).
-    void fit_incremental(SSKCache& cache, const int* train_indices, int n,
-                         int old_n, const double* y);
-
-    /// Predict mean and std at candidate circuits.
-    /// mu_out and std_out must be pre-allocated with n_candidates elements.
-    void predict(SSKCache& cache, const std::vector<GrayCode>& candidates,
-                 double* mu_out, double* std_out);
-
-    /// Compute log marginal likelihood for given hyperparameters.
-    double log_marginal_likelihood(SSKCache& cache, const int* train_indices,
-                                   int n, const double* y,
-                                   double test_log_scale, double test_noise);
-
-    /// Optimize hyperparameters (log_scale, noise) via grid search.
-    void optimize_hyperparameters(SSKCache& cache, const int* train_indices,
-                                  int n, const double* y,
-                                  int n_restarts,
-                                  const std::pair<double,double>& scale_bounds,
-                                  const std::pair<double,double>& noise_bounds);
-
-    double get_scale() const { return std::exp(log_scale); }
-};
 
 
 // ---------------------------------------------------------------------------
@@ -219,7 +107,27 @@ protected:
     // Precomputed edge neighbor map: edge_neighbors[e] = edges sharing at least one qubit with e
     std::vector<std::vector<int>> edge_neighbors;
 
-    // OSR data (using existing C++ infrastructure)
+    // Gate-based tokenization
+    // Token layout: [0, n_1q_tokens) = 1q gates, [n_1q_tokens, n_tokens) = directed CNOT gates
+    // For 1q token t: qubit = t % qbit_num, gate_type = gate_1q_types[t / qbit_num]
+    // For CNOT token t: directed_idx = t - n_1q_tokens
+    //   target = cnot_target_qbits[directed_idx], control = cnot_control_qbits[directed_idx]
+    bool gate_based_mode;                          // config flag, default false
+    int n_tokens;                                  // gate_based: n_1q_tokens + n_directed_cnots; else: n_edges
+    int n_1q_tokens;                               // gate_based: n_1q_types * qbit_num; else: 0
+    int n_directed_cnots;                          // gate_based: 2 * n_edges (both directions); else: 0
+    int n_1q_types;                                // number of distinct 1q gate types in alphabet
+    std::vector<gate_type> gate_1q_types;          // the 1q gate types in the alphabet
+    std::vector<int> gate_1q_param_counts;         // parameter count for each 1q gate type
+    std::vector<int> cnot_target_qbits;             // target qubit per directed CNOT
+    std::vector<int> cnot_control_qbits;            // control qubit per directed CNOT
+    std::vector<int> cnot_undirected_edge;          // undirected edge index per directed CNOT (for OSR)
+    std::vector<int> token_masks;                  // bitmask per token (1 bit for 1q, 2 for CNOT)
+    std::vector<std::vector<int>> token_neighbors; // tokens sharing at least one qubit
+
+    // OSR data (using existing C++ infrastructure) — disabled when has_custom_topology
+    bool has_custom_topology;
+    int config_D_start;  // user-specified D_start (-1 = use OSR)
     std::vector<std::vector<int>> osr_cuts;
     std::vector<int> osr_cut_bounds;
     std::vector<std::vector<int>> osr_cut_crossing_edges;
@@ -246,31 +154,48 @@ protected:
     int block_size;
     double local_search_fraction;
     int max_local_steps;
+    int local_search_positions;   // max positions to sample per local search step (0 = all)
+    int local_search_gp_subset;   // training subset size for lightweight GP in local search (0 = full)
     int n_thompson_samples;
-    double diversity_thresh;
     double d_penalty;
     int enum_threshold;
     int gp_max_train;  // max training points for GP (0 = unlimited)
+    double gp_score_ratio;  // fraction of gp_max_train filled by best-by-score (rest: diversity)
+    double diversity_thresh;  // kernel similarity threshold for Thompson Sampling diversity (default 0.95)
     int d_seed_budget;  // max D-1 circuits seeded into GP at D transition (default 50)
 
-    // D-window config
-    int d_window_width;
-    int base_window_width;
+    // Per-D search config
     int window_patience;
     int window_max_iters;
-    int max_consecutive_stagnations;
 
-    // Rollback-phase overrides (used during narrowing after solution found)
-    double rb_kappa;
-    int rb_window_patience;
-    int rb_window_max_iters;
-    int rb_candidates_per_iter;
-    int rb_n_thompson_samples;
-    double rb_local_search_fraction;
-    int rb_max_local_steps;
+    // Best-so-far plateau stagnation detection
+    int stagnation_window;              // lookback window for best-so-far plateau check (default 5)
+    double stagnation_improvement_frac; // required relative improvement in best (default 0.01)
+
+    // Adaptive kappa (exploration-exploitation scheduling)
+    bool adaptive_kappa;
+    double kappa_decay_rate;
+    double kappa_stagnation_boost;
+
+    // Position-guided mutations
+    double position_guided_fraction;
+    double position_lambda;
+    double position_temperature;  // softmax temperature override; -1.0 = use Quarl formula
 
     // Random baseline mode (bypasses GP/Thompson sampling)
     bool use_random_candidates;
+
+    // BOSS acquisition-guided GA
+    bool use_boss_ga;                // enable BOSS mode (default false)
+    int boss_pop_size;               // GA population size (default 200)
+    int boss_generations;            // GA generations per outer iteration (default 10)
+    double boss_offspring_ratio;     // offspring/population ratio (default 2.0)
+    int acquisition_function_type;   // 0=LCB, 1=Expected Improvement (default 0)
+
+    // Kernel type for GP surrogate
+    int kernel_type;      // 0=SSK, 1=Weisfeiler-Lehman (default 0)
+    int wl_iterations;    // WL refinement rounds (default 3)
+
 
     // Timing
     double decompose_time;
@@ -308,8 +233,17 @@ public:
     /// Surrogate-assisted evolutionary search for a single D
     void search_over_D_evolve(int D, const std::string& log_file);
 
-    /// Cross-D surrogate search from D_min to D_max (uses sliding D window)
+    /// Cross-D surrogate search from D_min to D_max (bottom-up)
     void search_over_D_range(int D_min, int D_max, const std::string& log_file);
+
+    /// Top-down compression from D_start down to D_min
+    void compress_over_D_range(int D_start, int D_min, const std::string& log_file,
+                               const GrayCode& initial_skeleton,
+                               Gates_block* imported_gate_structure,
+                               const Matrix_real& imported_params);
+
+    /// Extract CNOT/CROT skeleton from imported gate structure as a GrayCode
+    GrayCode extract_skeleton_from_gates();
 
     /// Result codes for per-window search
     enum WindowResult { WINDOW_SUCCESS, WINDOW_STAGNATION, WINDOW_BUDGET };
@@ -320,7 +254,8 @@ public:
         SSKCache& cache, GrayCodeSet& seen,
         std::vector<GrayCode>& X, std::vector<double>& y,
         std::vector<Matrix_real>& all_params,
-        const std::string& log_file);
+        const std::string& log_file,
+        int patience_override = -1);
 
     // ---- Circuit evaluation ----
 
@@ -335,18 +270,54 @@ public:
     std::pair<double, Matrix_real> decompose(const GrayCode& circuit);
 
     /// Thread-safe decompose variant that takes an external RNG
-    std::pair<double, Matrix_real> decompose_with_rng(const GrayCode& circuit, std::mt19937& local_gen);
+    virtual std::pair<double, Matrix_real> decompose_with_rng(const GrayCode& circuit, std::mt19937& local_gen);
+
+    /// Thread-safe decompose using provided initial parameters instead of random
+    std::pair<double, Matrix_real> decompose_with_initial_params(const GrayCode& circuit, const Matrix_real& initial_params);
 
     /// Parallel decompose a batch of circuits using TBB (respects 'parallel' config)
     void parallel_decompose_batch(const std::vector<GrayCode>& circuits, std::vector<DecompResult>& results);
 
     // ---- Gate structure building (following Tree_Search pattern) ----
 
-    Gates_block* construct_gate_structure(const GrayCode& gcode, bool finalize = true);
+    virtual Gates_block* construct_gate_structure(const GrayCode& gcode, bool finalize = true);
     void add_two_qubit_block(Gates_block* gate_structure, int target_qbit, int control_qbit);
+    void add_single_qubit_gate(Gates_block* gate_structure, int target_qbit, gate_type gtype = U3_OPERATION);
     // Bring base class add_finalyzing_layer into scope to avoid hiding
     using Optimization_Interface::add_finalyzing_layer;
     void add_finalyzing_layer(Gates_block* gate_structure);
+
+    // ---- Token helpers (gate-based mode) ----
+
+    /// Sort key for canonical ordering: (type, qubit1, qubit2)
+    /// U3 tokens: (0, qubit, -1). CNOT tokens: (1, target, control).
+    virtual std::tuple<int,int,int> token_sort_key(int token) const;
+
+    // ---- Incremental canonical DAG for point mutations ----
+
+    /// Cached DAG structure for incremental canonical form updates
+    struct CanonicalDAG {
+        std::vector<std::vector<int>> adj;   // adjacency list (n elements)
+        std::vector<int> in_degree;          // in-degree per position
+        std::vector<int> masks;              // bitmask per position
+        int n;                               // sequence length
+    };
+
+    /// Build a CanonicalDAG from a sequence. O(D^2).
+    CanonicalDAG build_canonical_dag(const GrayCode& seq);
+
+    /// Run topological sort on an existing DAG. O(D log D).
+    /// The seq must reflect the current token at each position.
+    GrayCode canonical_form_from_dag(const CanonicalDAG& dag, const GrayCode& seq);
+
+    /// Update DAG in-place for a single position change. O(D).
+    /// Modifies adj, in_degree, and masks for the new token at pos.
+    void update_dag_point_mutation(CanonicalDAG& dag, int pos, int old_token, int new_token);
+
+    /// Canonicalize and validate a point mutation using cached DAG.
+    /// Applies mutation, computes canonical form, restores DAG, validates.
+    GrayCode canonicalize_and_validate_from_dag(
+        CanonicalDAG& dag, const GrayCode& seq, int pos, int new_token);
 
     // ---- Validation and canonicalization ----
 
@@ -361,7 +332,7 @@ public:
     bool check_new_position(const int* window_masks, int pos);
 
     /// Check OSR feasibility of a circuit
-    bool check_osr_feasibility(const GrayCode& circuit);
+    virtual bool check_osr_feasibility(const GrayCode& circuit);
 
     // ---- Enumeration ----
 
@@ -374,9 +345,13 @@ public:
     GrayCode mutate_point(const GrayCode& seq);
     GrayCode mutate_swap(const GrayCode& seq);
     GrayCode mutate_block(const GrayCode& seq, int blk_size);
+    GrayCode mutate_transplant(const GrayCode& recipient, const GrayCode& donor, int blk_size);
+    GrayCode mutate_block_regenerate(const GrayCode& seq, int blk_size);
     GrayCode crossover_uniform(const GrayCode& seq1, const GrayCode& seq2);
     GrayCode mutate_grow(const GrayCode& seq, int D_max);
     GrayCode mutate_shrink(const GrayCode& seq, int D_min);
+    GrayCode mutate_point_guided(const GrayCode& seq, SSKCache& cache,
+                                 GPRegressor& gp, double scale);
 
     /// Greedy local search on LCB acquisition
     GrayCode local_search_acq(const GrayCode& start, SSKCache& cache,
@@ -386,18 +361,36 @@ public:
                               int* steps_out = nullptr);
 
     /// Generate hybrid candidate set (local search + evolutionary)
+    /// train_y_norm: normalized training targets (for lightweight GP proxy), may be nullptr
     void generate_candidates(const std::vector<GrayCode>& population,
                              const double* scores, int n_pop,
                              int n_candidates,
                              SSKCache& cache, GPRegressor& gp, double scale,
+                             const double* train_y_norm,
                              GrayCodeSet& seen,
                              std::vector<GrayCode>& candidates_out,
                              int& n_local_out, double& avg_steps_out,
-                             int D_min_gen = -1, int D_max_gen = -1);
+                             int D_min_gen = -1, int D_max_gen = -1,
+                             double force_random_fraction = 0.0);
 
     // ---- Acquisition ----
 
     double lcb(double mu, double std_val) const { return mu - kappa * std_val; }
+
+    /// Expected Improvement acquisition function (negated so lower = better)
+    double expected_improvement(double mu, double std_val, double y_best) const;
+
+    /// BOSS acquisition-guided GA: optimizes acquisition via evolutionary search
+    void boss_acquisition_ga(
+        const std::vector<GrayCode>& seed_circuits,
+        const double* scores, int n_seeds,
+        int pop_size, int n_generations,
+        SSKCache& cache, GPRegressor& gp, double scale,
+        const std::vector<int>& train_indices, int n_train,
+        double y_best_norm,
+        GrayCodeSet& seen,
+        std::vector<GrayCode>& candidates_out,
+        int D_min_gen = -1, int D_max_gen = -1);
 
     // ---- Standalone SSK Gram matrix ----
 

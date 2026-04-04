@@ -8,6 +8,7 @@ from squander.decomposition.qgd_N_Qubit_Decompositions_Wrapper import (
     qgd_N_Qubit_Decomposition_Tree_Search as N_Qubit_Decomposition_Tree_Search,
     qgd_N_Qubit_Decomposition_Tabu_Search as N_Qubit_Decomposition_Tabu_Search,
     qgd_N_Qubit_Decomposition_Surrogate as N_Qubit_Decomposition_Surrogate,
+    qgd_N_Qubit_Decomposition_Surrogate_GateLevel as N_Qubit_Decomposition_Surrogate_GateLevel,
 )
 
 # State preparation (depends on adaptive decomposition)
