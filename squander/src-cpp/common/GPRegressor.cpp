@@ -351,11 +351,11 @@ void SSKCache::compute_cross_kernel(const std::vector<GrayCode>& candidates,
         std::vector<std::unordered_map<size_t, int>> cand_feats(n_cand);
         std::vector<double> cand_self_raw(n_cand);
 
-        tbb::parallel_for(0, n_cand, [&](int c) {
+        for (int c = 0; c < n_cand; ++c) {
             cand_feats[c] = compute_wl_features(candidates[c].get_data(),
                                                 static_cast<int>(candidates[c].size()));
             cand_self_raw[c] = wl_dot(cand_feats[c], cand_feats[c]);
-        });
+        }
 
         std::vector<double> inv_dr(n_reg);
         for (int r = 0; r < n_reg; ++r)
@@ -503,11 +503,11 @@ void SSKCache::compute_cross_kernel_subset(
         // --- WL cross-kernel ---
         std::vector<std::unordered_map<size_t, int>> cand_feats(n_cand);
         std::vector<double> cand_self_raw(n_cand, 0.0);
-        tbb::parallel_for(0, n_cand, [&](int c) {
+        for (int c = 0; c < n_cand; ++c) {
             cand_feats[c] = compute_wl_features(candidates[c].get_data(),
                                                 static_cast<int>(candidates[c].size()));
             cand_self_raw[c] = wl_dot(cand_feats[c], cand_feats[c]);
-        });
+        }
         std::vector<double> inv_dc(n_cand);
         for (int c = 0; c < n_cand; ++c)
             inv_dc[c] = 1.0 / std::sqrt(std::max(cand_self_raw[c], 1e-24));
