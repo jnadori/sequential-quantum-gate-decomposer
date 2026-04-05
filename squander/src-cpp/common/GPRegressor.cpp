@@ -167,17 +167,14 @@ void SSKCache::batch_ssk_raw(const int* ci, const int* cj, int P, int n1,
     const double msq = match_sq;
     const int ord = order;
 
-    // Parallel over pairs — each thread gets its own working arrays
-    tbb::parallel_for(tbb::blocked_range<int>(0, P),
-        [&](const tbb::blocked_range<int>& range) {
-        std::vector<double> kp(n1 * n2);
-        std::vector<double> tmp(n1 * n2);
-        std::vector<double> run_vec(n1);
-        std::vector<double> mask(n1);
-        std::vector<double> kp_col(n1);
-        std::vector<std::vector<int>> b_positions;
+    std::vector<double> kp(n1 * n2);
+    std::vector<double> tmp(n1 * n2);
+    std::vector<double> run_vec(n1);
+    std::vector<double> mask(n1);
+    std::vector<double> kp_col(n1);
+    std::vector<std::vector<int>> b_positions;
 
-        for (int p = range.begin(); p < range.end(); ++p) {
+    for (int p = 0; p < P; ++p) {
         const int* a = ci + p * n1;
         const int* b = cj + p * n2;
 
@@ -246,8 +243,7 @@ void SSKCache::batch_ssk_raw(const int* ci, const int* cj, int P, int n1,
         }
 
         raw_out[p] = raw;
-        }
-    });
+    }
 }
 double SSKCache::single_ssk_raw(const int* a, int n1, const int* b, int n2) {
     double result;
@@ -364,12 +360,12 @@ void SSKCache::compute_cross_kernel(const std::vector<GrayCode>& candidates,
         for (int c = 0; c < n_cand; ++c)
             inv_dc[c] = 1.0 / std::sqrt(std::max(cand_self_raw[c], 1e-24));
 
-        tbb::parallel_for(0, n_cand, [&](int c) {
+        for (int c = 0; c < n_cand; ++c) {
             for (int r = 0; r < n_reg; ++r) {
                 double raw = wl_dot(wl_features_[r], cand_feats[c]);
                 result_out[r * n_cand + c] = scale * raw * inv_dr[r] * inv_dc[c];
             }
-        });
+        }
         return;
     }
 
