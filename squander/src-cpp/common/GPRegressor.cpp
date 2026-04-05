@@ -29,21 +29,9 @@ limitations under the License.
 #include <iostream>
 #include <limits>
 #include <sstream>
-#include <thread>
-#include "tbb/tbb.h"
-
 
 #include <cstdlib>
 
-#ifdef _OPENMP
-#include <omp.h>
-#endif
-
-#if BLAS == 1
-extern "C" void MKL_Set_Num_Threads(int);
-#elif BLAS == 2
-extern "C" void openblas_set_num_threads(int);
-#endif
 
 // ============================================================================
 // SSKCache implementation

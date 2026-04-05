@@ -31,15 +31,9 @@ limitations under the License.
 #include <iostream>
 #include <limits>
 #include <sstream>
-#include <thread>
-#include "tbb/tbb.h"
-
 
 #include <cstdlib>
 
-#ifdef _OPENMP
-#include <omp.h>
-#endif
 
 #if BLAS == 1
 extern "C" void MKL_Set_Num_Threads(int);
@@ -53,11 +47,6 @@ static void force_single_thread_blas_lapack() {
     setenv("MKL_NUM_THREADS", "1", 1);
     setenv("MKL_DYNAMIC", "FALSE", 1);
     setenv("OPENBLAS_NUM_THREADS", "1", 1);
-
-#ifdef _OPENMP
-    omp_set_dynamic(0);
-    omp_set_num_threads(1);
-#endif
 
 #if BLAS == 1
     MKL_Set_Num_Threads(1);
@@ -1038,15 +1027,7 @@ GrayCode N_Qubit_Decomposition_Surrogate::local_search_acq(
     double scale, GrayCodeSet& seen,
     int D_min_local, int D_max_local, int* steps_out) {
 
-    // Thread-local RNG: seeded with thread_id XOR a monotonic counter to guarantee
-    // distinct seeds even when threads initialize simultaneously (avoids time-based collision).
-    thread_local std::mt19937 local_rng = []() {
-        static std::atomic<uint32_t> ctr{0};
-        uint32_t tid = static_cast<uint32_t>(
-            std::hash<std::thread::id>{}(std::this_thread::get_id()));
-        uint32_t count = ctr.fetch_add(1, std::memory_order_relaxed);
-        return std::mt19937(tid ^ (count * 0x9e3779b9u));
-    }();
+    static std::mt19937 local_rng(std::random_device{}());
 
     GrayCode current = start.copy();
 
@@ -1794,32 +1775,15 @@ void N_Qubit_Decomposition_Surrogate::generate_candidates(
             local_gp_ptr = &local_gp;
         }
 
-        // Phase B: run local searches in parallel
-        // local_search_acq is read-only on cache, gp, and seen
+        // Phase B: run local searches sequentially
         std::vector<GrayCode> local_results(n_local_target);
         std::vector<int> local_steps(n_local_target, 0);
 
-        unsigned int nthreads = std::thread::hardware_concurrency();
-        int64_t concurrency = std::min(static_cast<int64_t>(nthreads),
-                                       static_cast<int64_t>(n_local_target));
-        int parallel = get_parallel_configuration();
-        int64_t work_batch = (parallel == 0) ? concurrency : 1;
-
-        tbb::parallel_for(
-            tbb::blocked_range<int64_t>(0, concurrency, work_batch),
-            [&](tbb::blocked_range<int64_t> r) {
-                for (int64_t job_idx = r.begin(); job_idx < r.end(); ++job_idx) {
-                    int64_t batch_sz = n_local_target / concurrency;
-                    int64_t start = job_idx * batch_sz;
-                    int64_t end = (job_idx == concurrency - 1) ? n_local_target : start + batch_sz;
-
-                    for (int64_t i = start; i < end; ++i) {
-                        local_results[i] = local_search_acq(
-                            local_parents[i], cache, *local_gp_ptr, local_scale, seen,
-                            D_min_gen, D_max_gen, &local_steps[i]);
-                    }
-                }
-            });
+        for (int64_t i = 0; i < n_local_target; ++i) {
+            local_results[i] = local_search_acq(
+                local_parents[i], cache, *local_gp_ptr, local_scale, seen,
+                D_min_gen, D_max_gen, &local_steps[i]);
+        }
 
         // Phase C: sequential dedup and insert
         for (int i = 0; i < n_local_target; ++i) {
@@ -2082,31 +2046,15 @@ void N_Qubit_Decomposition_Surrogate::parallel_decompose_batch(
     results.resize(n);
     if (n == 0) return;
 
-    unsigned int nthreads = std::thread::hardware_concurrency();
-    int64_t concurrency = std::min(static_cast<int64_t>(nthreads), static_cast<int64_t>(n));
-    int parallel = get_parallel_configuration();
-    int64_t work_batch = (parallel == 0) ? concurrency : 1;
-
-    tbb::parallel_for(
-        tbb::blocked_range<int64_t>(0, concurrency, work_batch),
-        [&](tbb::blocked_range<int64_t> r) {
-            std::mt19937 local_gen(std::random_device{}());
-
-            for (int64_t job_idx = r.begin(); job_idx < r.end(); ++job_idx) {
-                int64_t batch_sz = n / concurrency;
-                int64_t start = job_idx * batch_sz;
-                int64_t end = (job_idx == concurrency - 1) ? n : start + batch_sz;
-
-                for (int64_t i = start; i < end; ++i) {
-                    auto t0 = std::chrono::high_resolution_clock::now();
-                    auto res = decompose_with_rng(circuits[i], local_gen);
-                    auto t1 = std::chrono::high_resolution_clock::now();
-                    results[i].score = res.first;
-                    results[i].params = res.second;
-                    results[i].elapsed = std::chrono::duration<double>(t1 - t0).count();
-                }
-            }
-        });
+    std::mt19937 local_gen(std::random_device{}());
+    for (int64_t i = 0; i < n; ++i) {
+        auto t0 = std::chrono::high_resolution_clock::now();
+        auto res = decompose_with_rng(circuits[i], local_gen);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        results[i].score = res.first;
+        results[i].params = res.second;
+        results[i].elapsed = std::chrono::duration<double>(t1 - t0).count();
+    }
 }
 
 
@@ -2749,8 +2697,7 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
         int attempts = 0;
         while (generated < needed && attempts < needed * 100) {
             // Phase A: batch-generate circuits sequentially
-            int batch_target = std::min(needed - generated,
-                static_cast<int>(std::thread::hardware_concurrency()));
+            int batch_target = needed - generated;
             std::vector<GrayCode> batch_circuits;
             batch_circuits.reserve(batch_target);
 
