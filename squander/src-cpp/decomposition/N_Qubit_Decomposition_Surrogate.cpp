@@ -1613,28 +1613,36 @@ void N_Qubit_Decomposition_Surrogate::boss_acquisition_ga(
         batch_acquisition(offspring_circuits, off_acq, off_mu);
 
         // (mu + lambda) replacement: merge parents + offspring, keep top pop_size
-        std::vector<Individual> combined;
-        combined.reserve(actual_pop + n_off);
-        for (auto& ind : population)
-            combined.push_back({ind.circuit.copy(), ind.acq_value, ind.mu});
-        for (int i = 0; i < n_off; ++i) {
-            combined.push_back({offspring_circuits[i].copy(), off_acq[i], off_mu[i]});
-        }
+        // Sort indices only — avoids sorting a container of GrayCodes directly
+        int n_combined = actual_pop + n_off;
+        std::vector<int> order(n_combined);
+        std::iota(order.begin(), order.end(), 0);
+        std::sort(order.begin(), order.end(), [&](int a, int b) {
+            double av = (a < actual_pop) ? population[a].acq_value : off_acq[a - actual_pop];
+            double bv = (b < actual_pop) ? population[b].acq_value : off_acq[b - actual_pop];
+            return av < bv;
+        });
 
-        // Sort by acquisition value (lower = better)
-        std::sort(combined.begin(), combined.end(),
-                  [](const Individual& a, const Individual& b) {
-                      return a.acq_value < b.acq_value;
-                  });
-
-        // Keep top pop_size, rebuild pop_seen
-        int new_pop = std::min(pop_size, static_cast<int>(combined.size()));
-        population.clear();
-        pop_seen.clear();
+        // Build new population in sorted order, then swap
+        int new_pop = std::min(pop_size, n_combined);
+        std::vector<Individual> new_population;
+        new_population.reserve(new_pop);
+        GrayCodeSet new_pop_seen;
         for (int i = 0; i < new_pop; ++i) {
-            pop_seen.insert(combined[i].circuit.copy());
-            population.push_back({combined[i].circuit.copy(), combined[i].acq_value, combined[i].mu});
+            int idx = order[i];
+            if (idx < actual_pop) {
+                new_pop_seen.insert(population[idx].circuit.copy());
+                new_population.push_back({population[idx].circuit.copy(),
+                                          population[idx].acq_value, population[idx].mu});
+            } else {
+                int oi = idx - actual_pop;
+                new_pop_seen.insert(offspring_circuits[oi].copy());
+                new_population.push_back({offspring_circuits[oi].copy(),
+                                          off_acq[oi], off_mu[oi]});
+            }
         }
+        population = std::move(new_population);
+        pop_seen = std::move(new_pop_seen);
         actual_pop = new_pop;
 
         // Update pop_dist range
