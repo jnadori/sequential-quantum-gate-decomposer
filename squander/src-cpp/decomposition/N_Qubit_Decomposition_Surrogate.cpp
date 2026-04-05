@@ -1446,7 +1446,7 @@ void N_Qubit_Decomposition_Surrogate::boss_acquisition_ga(
         }
 
         pop_seen.insert(cand.copy());
-        population.push_back({std::move(cand), 0.0, 0.0});
+        population.push_back({cand.copy(), 0.0, 0.0});
     }
 
     // Phase B: fill rest with random circuits
@@ -1477,7 +1477,7 @@ void N_Qubit_Decomposition_Surrogate::boss_acquisition_ga(
             GrayCode seq = generate_valid_sequence(D_val);
             if (seq.size() > 0 && pop_seen.find(seq) == pop_seen.end()) {
                 pop_seen.insert(seq.copy());
-                population.push_back({std::move(seq), 0.0, 0.0});
+                population.push_back({seq.copy(), 0.0, 0.0});
             }
         }
     } else {
@@ -1489,7 +1489,7 @@ void N_Qubit_Decomposition_Surrogate::boss_acquisition_ga(
             GrayCode seq = generate_valid_sequence(D);
             if (seq.size() > 0 && pop_seen.find(seq) == pop_seen.end()) {
                 pop_seen.insert(seq.copy());
-                population.push_back({std::move(seq), 0.0, 0.0});
+                population.push_back({seq.copy(), 0.0, 0.0});
             }
         }
     }
@@ -1601,7 +1601,7 @@ void N_Qubit_Decomposition_Surrogate::boss_acquisition_ga(
                 (!mixed_d || (static_cast<int>(result.size()) >= D_min_gen &&
                               static_cast<int>(result.size()) <= D_max_gen))) {
                 offspring_seen.insert(result.copy());
-                offspring_circuits.push_back(std::move(result));
+                offspring_circuits.push_back(result.copy());
             }
         }
 
@@ -1615,9 +1615,10 @@ void N_Qubit_Decomposition_Surrogate::boss_acquisition_ga(
         // (mu + lambda) replacement: merge parents + offspring, keep top pop_size
         std::vector<Individual> combined;
         combined.reserve(actual_pop + n_off);
-        for (auto& ind : population) combined.push_back(std::move(ind));
+        for (auto& ind : population)
+            combined.push_back({ind.circuit.copy(), ind.acq_value, ind.mu});
         for (int i = 0; i < n_off; ++i) {
-            combined.push_back({std::move(offspring_circuits[i]), off_acq[i], off_mu[i]});
+            combined.push_back({offspring_circuits[i].copy(), off_acq[i], off_mu[i]});
         }
 
         // Sort by acquisition value (lower = better)
@@ -1632,7 +1633,7 @@ void N_Qubit_Decomposition_Surrogate::boss_acquisition_ga(
         pop_seen.clear();
         for (int i = 0; i < new_pop; ++i) {
             pop_seen.insert(combined[i].circuit.copy());
-            population.push_back(std::move(combined[i]));
+            population.push_back({combined[i].circuit.copy(), combined[i].acq_value, combined[i].mu});
         }
         actual_pop = new_pop;
 
