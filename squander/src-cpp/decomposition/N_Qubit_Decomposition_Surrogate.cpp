@@ -228,6 +228,9 @@ N_Qubit_Decomposition_Surrogate::N_Qubit_Decomposition_Surrogate(
     max_local_steps = 10;
     local_search_positions = 5;
     local_search_gp_subset = 50;
+    local_search_max_neighbors = 50;
+    local_search_patience = 3;
+    local_search_min_improvement = 1e-4;
     n_thompson_samples = 10;
     d_penalty = 0.0;
     enum_threshold = 10000;
@@ -282,6 +285,9 @@ N_Qubit_Decomposition_Surrogate::N_Qubit_Decomposition_Surrogate(
     get_int("max_local_steps",max_local_steps);
     get_int("local_search_positions",local_search_positions);
     get_int("local_search_gp_subset",local_search_gp_subset);
+    get_int("local_search_max_neighbors",local_search_max_neighbors);
+    get_int("local_search_patience",local_search_patience);
+    get_dbl("local_search_min_improvement",local_search_min_improvement);
     get_int("n_thompson_samples",n_thompson_samples);
     get_dbl("d_penalty",d_penalty);
     get_int("enum_threshold",enum_threshold);
@@ -1063,6 +1069,7 @@ GrayCode N_Qubit_Decomposition_Surrogate::local_search_acq(
     double best_lcb = lcb(mu_cur, std_cur);
 
     int steps_taken = 0;
+    int no_improve_streak = 0;
     std::vector<int> pos_visit_count(static_cast<int>(current.size()), 0);
 
     for (int step = 0; step < max_local_steps; ++step) {
@@ -1167,6 +1174,19 @@ GrayCode N_Qubit_Decomposition_Surrogate::local_search_acq(
             }
         }
 
+        // Cap total neighbors per step to bound kernel computation cost
+        if (local_search_max_neighbors > 0 &&
+            static_cast<int>(neighbors.size()) > local_search_max_neighbors) {
+            for (int i = 0; i < local_search_max_neighbors; ++i) {
+                std::uniform_int_distribution<int> sd(i, static_cast<int>(neighbors.size()) - 1);
+                int j = sd(local_rng);
+                std::swap(neighbors[i], neighbors[j]);
+                std::swap(neighbor_pos[i], neighbor_pos[j]);
+            }
+            neighbors.resize(local_search_max_neighbors);
+            neighbor_pos.resize(local_search_max_neighbors);
+        }
+
         // Deduplicate neighbors
         GrayCodeSet neighbor_set;
         std::vector<GrayCode> unique_neighbors;
@@ -1265,6 +1285,14 @@ GrayCode N_Qubit_Decomposition_Surrogate::local_search_acq(
         }
 
         if (best_nb_lcb >= best_lcb) break;  // local optimum
+
+        // Patience: stop if improvement is below relative threshold
+        double improvement = best_lcb - best_nb_lcb;
+        if (improvement < local_search_min_improvement * std::abs(best_lcb) + 1e-12)
+            no_improve_streak++;
+        else
+            no_improve_streak = 0;
+        if (local_search_patience > 0 && no_improve_streak >= local_search_patience) break;
 
         // Update position visit count
         int selected_pos = neighbor_pos[best_nb_idx];

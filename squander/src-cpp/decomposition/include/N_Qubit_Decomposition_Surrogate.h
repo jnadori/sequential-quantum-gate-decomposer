@@ -156,6 +156,9 @@ protected:
     int max_local_steps;
     int local_search_positions;   // max positions to sample per local search step (0 = all)
     int local_search_gp_subset;   // training subset size for lightweight GP in local search (0 = full)
+    int local_search_max_neighbors;  // max neighbors evaluated per local search step (0 = unlimited)
+    int local_search_patience;       // stop local search after this many steps with marginal improvement
+    double local_search_min_improvement; // relative improvement threshold for patience check
     int n_thompson_samples;
     double d_penalty;
     int enum_threshold;
