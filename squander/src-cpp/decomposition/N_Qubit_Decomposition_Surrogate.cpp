@@ -23,6 +23,9 @@ limitations under the License.
 #include "BFGS_Powell.h"
 #include "GPRegressor.h"
 
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
+
 #include <chrono>
 #include <random>
 #include <cstring>
@@ -34,6 +37,9 @@ limitations under the License.
 
 #include <cstdlib>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 #if BLAS == 1
 extern "C" void MKL_Set_Num_Threads(int);
@@ -47,6 +53,11 @@ static void force_single_thread_blas_lapack() {
     setenv("MKL_NUM_THREADS", "1", 1);
     setenv("MKL_DYNAMIC", "FALSE", 1);
     setenv("OPENBLAS_NUM_THREADS", "1", 1);
+
+#ifdef _OPENMP
+    omp_set_dynamic(0);
+    omp_set_num_threads(1);
+#endif
 
 #if BLAS == 1
     MKL_Set_Num_Threads(1);
@@ -1027,7 +1038,7 @@ GrayCode N_Qubit_Decomposition_Surrogate::local_search_acq(
     double scale, GrayCodeSet& seen,
     int D_min_local, int D_max_local, int* steps_out) {
 
-    static std::mt19937 local_rng(std::random_device{}());
+    thread_local std::mt19937 local_rng(std::random_device{}());
 
     GrayCode current = start.copy();
 
@@ -1775,15 +1786,20 @@ void N_Qubit_Decomposition_Surrogate::generate_candidates(
             local_gp_ptr = &local_gp;
         }
 
-        // Phase B: run local searches sequentially
+        // Phase B: run local searches in parallel (cache/gp/seen are read-only here)
         std::vector<GrayCode> local_results(n_local_target);
         std::vector<int> local_steps(n_local_target, 0);
 
-        for (int64_t i = 0; i < n_local_target; ++i) {
-            local_results[i] = local_search_acq(
-                local_parents[i], cache, *local_gp_ptr, local_scale, seen,
-                D_min_gen, D_max_gen, &local_steps[i]);
-        }
+        tbb::parallel_for(
+            tbb::blocked_range<int>(0, n_local_target, 1),
+            [&](tbb::blocked_range<int> r) {
+                for (int i = r.begin(); i < r.end(); ++i) {
+                    local_results[i] = local_search_acq(
+                        local_parents[i], cache, *local_gp_ptr, local_scale, seen,
+                        D_min_gen, D_max_gen, &local_steps[i]);
+                }
+            }
+        );
 
         // Phase C: sequential dedup and insert
         for (int i = 0; i < n_local_target; ++i) {
@@ -2046,15 +2062,20 @@ void N_Qubit_Decomposition_Surrogate::parallel_decompose_batch(
     results.resize(n);
     if (n == 0) return;
 
-    std::mt19937 local_gen(std::random_device{}());
-    for (int64_t i = 0; i < n; ++i) {
-        auto t0 = std::chrono::high_resolution_clock::now();
-        auto res = decompose_with_rng(circuits[i], local_gen);
-        auto t1 = std::chrono::high_resolution_clock::now();
-        results[i].score = res.first;
-        results[i].params = res.second;
-        results[i].elapsed = std::chrono::duration<double>(t1 - t0).count();
-    }
+    tbb::parallel_for(
+        tbb::blocked_range<int>(0, n, 1),
+        [&](tbb::blocked_range<int> r) {
+            thread_local std::mt19937 local_gen(std::random_device{}());
+            for (int i = r.begin(); i < r.end(); ++i) {
+                auto t0 = std::chrono::high_resolution_clock::now();
+                auto res = decompose_with_rng(circuits[i], local_gen);
+                auto t1 = std::chrono::high_resolution_clock::now();
+                results[i].score = res.first;
+                results[i].params = res.second;
+                results[i].elapsed = std::chrono::duration<double>(t1 - t0).count();
+            }
+        }
+    );
 }
 
 
