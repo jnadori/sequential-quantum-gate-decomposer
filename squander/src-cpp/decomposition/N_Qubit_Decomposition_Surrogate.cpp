@@ -1035,7 +1035,7 @@ GrayCode N_Qubit_Decomposition_Surrogate::mutate_shrink(const GrayCode& seq, int
 
 GrayCode N_Qubit_Decomposition_Surrogate::local_search_acq(
     const GrayCode& start, SSKCache& cache, GPRegressor& gp,
-    double scale, GrayCodeSet& seen,
+    double scale,
     int D_min_local, int D_max_local, int* steps_out) {
 
     thread_local std::mt19937 local_rng(std::random_device{}());
@@ -1107,7 +1107,7 @@ GrayCode N_Qubit_Decomposition_Surrogate::local_search_acq(
             for (int e = 0; e < n_tokens; ++e) {
                 if (e == current[pos]) continue;
                 GrayCode cand = canonicalize_and_validate_from_dag(dag, current, pos, e);
-                if (cand.size() > 0 && seen.find(cand) == seen.end()) {
+                if (cand.size() > 0) {
                     neighbors.push_back(std::move(cand));
                     neighbor_pos.push_back(pos);
                 }
@@ -1136,7 +1136,7 @@ GrayCode N_Qubit_Decomposition_Surrogate::local_search_acq(
                     new_seq[pos] = e;
                     for (int i = pos; i < D; ++i) new_seq[i + 1] = current[i];
                     GrayCode cand = canonicalize_and_validate(new_seq);
-                    if (cand.size() > 0 && seen.find(cand) == seen.end()) {
+                    if (cand.size() > 0) {
                         neighbors.push_back(std::move(cand));
                         neighbor_pos.push_back(-1);
                     }
@@ -1160,7 +1160,7 @@ GrayCode N_Qubit_Decomposition_Surrogate::local_search_acq(
                 int pos = shrink_positions[pi];
                 GrayCode new_seq = current.remove_Digit(pos);
                 GrayCode cand = canonicalize_and_validate(new_seq);
-                if (cand.size() > 0 && seen.find(cand) == seen.end()) {
+                if (cand.size() > 0) {
                     neighbors.push_back(std::move(cand));
                     neighbor_pos.push_back(-1);
                 }
@@ -1795,7 +1795,7 @@ void N_Qubit_Decomposition_Surrogate::generate_candidates(
             [&](tbb::blocked_range<int> r) {
                 for (int i = r.begin(); i < r.end(); ++i) {
                     local_results[i] = local_search_acq(
-                        local_parents[i], cache, *local_gp_ptr, local_scale, seen,
+                        local_parents[i], cache, *local_gp_ptr, local_scale,
                         D_min_gen, D_max_gen, &local_steps[i]);
                 }
             }
@@ -1830,7 +1830,7 @@ void N_Qubit_Decomposition_Surrogate::generate_candidates(
     for (auto& c : candidates_out)
         batch_seen.insert(c.copy());
 
-    int max_attempts = n_candidates * 10 + static_cast<int>(seen.size());
+    int max_attempts = n_candidates * 10;
     for (int attempt = 0;
          static_cast<int>(candidates_out.size()) < n_candidates && attempt < max_attempts;
          ++attempt) {
@@ -2901,8 +2901,29 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
             std::sort(filtered_x_indices.begin(), filtered_x_indices.end(),
                       [&y](int a, int b) { return y[a] < y[b]; });
 
+            // Fill remaining GP budget with lower-D results (best by score first)
+            if (d_filter_lo > 1) {
+                int n_fill_target = std::max(0, gp_max_train - n_filtered);
+                if (n_fill_target > 0) {
+                    std::vector<int> lower_indices;
+                    for (int i = 0; i < static_cast<int>(X.size()); ++i) {
+                        int d = static_cast<int>(X[i].size());
+                        if (d < d_filter_lo)
+                            lower_indices.push_back(i);
+                    }
+                    std::sort(lower_indices.begin(), lower_indices.end(),
+                              [&y](int a, int b) { return y[a] < y[b]; });
+                    int n_fill = std::min(static_cast<int>(lower_indices.size()), n_fill_target);
+                    for (int i = 0; i < n_fill; ++i)
+                        filtered_x_indices.push_back(lower_indices[i]);
+                    // Re-sort so Cholesky stage sees globally best circuits first
+                    std::sort(filtered_x_indices.begin(), filtered_x_indices.end(),
+                              [&y](int a, int b) { return y[a] < y[b]; });
+                }
+            }
+
             // Register top 2*gp_max_train by score (lazy, bounded)
-            int reg_limit = std::min(n_filtered, 2 * gp_max_train);
+            int reg_limit = std::min(static_cast<int>(filtered_x_indices.size()), 2 * gp_max_train);
             for (int i = 0; i < reg_limit; ++i) {
                 int xi = filtered_x_indices[i];
                 if (ssk_cache.circuit_to_idx.find(X[xi]) == ssk_cache.circuit_to_idx.end())
@@ -3282,9 +3303,48 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
                 if (!found) break;
             }
 
+            // If we didn't select enough candidates, fill remaining slots with random circuits
+            int n_selected = static_cast<int>(selected_indices.size());
+            if (n_selected < n_pick) {
+                int max_attempts = (n_pick - n_selected) * 20;
+                int attempts = 0;
+                while (n_selected < n_pick && attempts < max_attempts) {
+                    attempts++;
+                    // Pick a random D in [win_lo, win_hi]
+                    std::uniform_int_distribution<int> d_dist(win_lo, win_hi);
+                    int rand_D = d_dist(gen);
+                    GrayCode rand_circ = generate_valid_sequence(rand_D);
+                    if (rand_circ.empty()) continue;
+                    rand_circ = canonicalize_and_validate(rand_circ);
+                    if (rand_circ.empty()) continue;
+                    if (seen.find(rand_circ) != seen.end()) continue;
+                    // Check not already in selected_circuits (by canonical form)
+                    bool dup = false;
+                    for (auto& sc : selected_circuits) {
+                        if (sc == rand_circ) { dup = true; break; }
+                    }
+                    if (dup) continue;
+                    // Add as a new candidate
+                    int new_idx = static_cast<int>(candidates.size());
+                    candidates.push_back(rand_circ);
+                    selected_indices.push_back(new_idx);
+                    selected_circuits.push_back(rand_circ.copy());
+                    n_selected++;
+                }
+                if (n_selected < n_pick) {
+                    std::ofstream flog(log_file, std::ios::app);
+                    flog << "  [random fill] could not reach target (target=" << n_pick << " got=" << n_selected << ")" << std::endl;
+                }
+            }
+
             // Save GP predicted mu for selected candidates (for rank correlation)
-            for (int cidx : selected_indices)
-                gp_mu_selected.push_back(log_mu_norm[cidx]);
+            // New random-fill candidates don't have GP mu; use 0.0 as placeholder
+            for (int cidx : selected_indices) {
+                if (cidx < static_cast<int>(log_mu_norm.size()))
+                    gp_mu_selected.push_back(log_mu_norm[cidx]);
+                else
+                    gp_mu_selected.push_back(0.0);
+            }
 
             t_phase1 = std::chrono::high_resolution_clock::now();
             t_acq = std::chrono::duration<double>(t_phase1 - t_phase0).count();

@@ -356,7 +356,6 @@ public:
     /// Greedy local search on LCB acquisition
     GrayCode local_search_acq(const GrayCode& start, SSKCache& cache,
                               GPRegressor& gp, double scale,
-                              GrayCodeSet& seen,
                               int D_min_local = -1, int D_max_local = -1,
                               int* steps_out = nullptr);
 
