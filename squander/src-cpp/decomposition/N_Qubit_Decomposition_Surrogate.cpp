@@ -3314,9 +3314,9 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
                     std::uniform_int_distribution<int> d_dist(win_lo, win_hi);
                     int rand_D = d_dist(gen);
                     GrayCode rand_circ = generate_valid_sequence(rand_D);
-                    if (rand_circ.empty()) continue;
+                    if (rand_circ.size() == 0) continue;
                     rand_circ = canonicalize_and_validate(rand_circ);
-                    if (rand_circ.empty()) continue;
+                    if (rand_circ.size() == 0) continue;
                     if (seen.find(rand_circ) != seen.end()) continue;
                     // Check not already in selected_circuits (by canonical form)
                     bool dup = false;
