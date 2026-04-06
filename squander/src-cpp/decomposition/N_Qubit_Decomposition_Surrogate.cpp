@@ -3020,8 +3020,14 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
                     std::unordered_set<int> old_set(gp.train_indices_.begin(),
                                                     gp.train_indices_.begin() + old_n_train);
                     int pos = 0;
+                    // Skip duplicates in gp.train_indices_: if the same index appears
+                    // more than once, writing it multiple times in the first loop would
+                    // push pos beyond n_x (the allocated size of ri/ry/rl).
+                    std::unordered_set<int> written;
                     for (int i = 0; i < old_n_train; ++i) {
-                        int src = new_pos[gp.train_indices_[i]];
+                        int idx = gp.train_indices_[i];
+                        if (!written.insert(idx).second) continue;  // already written
+                        int src = new_pos[idx];
                         ri[pos] = train_indices[src];
                         ry[pos] = train_y[src];
                         rl[pos] = log_y_norm[src];
