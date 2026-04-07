@@ -1101,21 +1101,11 @@ void N_Qubit_Decomposition_Tree_Search::add_two_qubit_block(Gates_block* gate_st
                                                             int control_qbit) {
 
         if (custom_blocks){
-        
-            Gates_block* layer = two_qubit_block_template->clone();
-            
-            layer->set_qbit_num(qbit_num);
-            
-            std::vector<int> qbit_order(qbit_num,-2);
-            
-            int target_qbit_idx = qbit_num -1 -target_qbit;
-            int control_qbit_idx = qbit_num -1 -control_qbit;
-            qbit_order[target_qbit_idx] = 0;
-            qbit_order[control_qbit_idx] = 1;
-            layer->reorder_qubits(qbit_order);
-            
+
+            std::map<int, int> qbit_map = {{0, target_qbit}, {1, control_qbit}};
+            Gates_block* layer = two_qubit_block_template->create_remapped_circuit(qbit_map, qbit_num);
             gate_structure->add_gate(layer);
-        
+
         }
     else{
             Gates_block* layer = new Gates_block( qbit_num );

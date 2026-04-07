@@ -116,14 +116,16 @@ def _approx_worker_init(Umtx, config, two_qbit_basis, qbit_num, layer_fidelity, 
 def _decompose_node_approx_worker(node):
     """Worker function for parallel approximate node decomposition.
 
-    Like _decompose_node_worker but uses adaptive tolerance based on node depth
-    and the layer_fidelity / minimal_error parameters.
+    Like _decompose_node_worker but computes two error scores:
+      - gate_error: the adaptive layer-accumulation error for this node depth
+      - decomp_error: the actual optimization cost (Optimization_Problem)
+    The combined score returned is sqrt(gate_error^2 + decomp_error^2).
 
-    Returns only (score, params) — no C++ objects — to keep IPC cheap.
+    Returns (combined_score, decomp_error, params) — no C++ objects — to keep IPC cheap.
     """
-    # Compute adaptive tolerance from node depth
+    # Compute gate_error (adaptive, based on node depth)
     level_num = node.depth
-    tolerance = max(level_num, 1) * (1 - _worker_layer_fidelity) * _worker_minimal_error
+    gate_error = max(level_num, 1) * (1 - _worker_layer_fidelity) * _worker_minimal_error
 
     # Build the ansatz circuit (same logic as construct_circuit_from_node)
     node_circuit = Circuit(_worker_qbit_num)
@@ -138,10 +140,10 @@ def _decompose_node_approx_worker(node):
     node_circuit.add_Circuit(final_layer)
     ansatz = node_circuit
 
-    # Create a fresh decomposition instance and run
+    # Create a fresh decomposition instance and run with fixed config tolerance
     cDecompose = N_Qubit_Decomposition_custom(_worker_Umtx, config=_worker_config)
     cDecompose.set_Verbose(0)
-    cDecompose.set_Optimization_Tolerance(tolerance)
+    cDecompose.set_Optimization_Tolerance(_worker_config['tolerance'])
     cDecompose.set_Cost_Function_Variant(3)
     cDecompose.set_Optimizer("BFGS")
     cDecompose.set_Gate_Structure(ansatz)
@@ -150,8 +152,9 @@ def _decompose_node_approx_worker(node):
     )
     cDecompose.Start_Decomposition()
     params = cDecompose.get_Optimized_Parameters()
-    score = cDecompose.Optimization_Problem(params)
-    return (score, params)
+    decomp_error = cDecompose.Optimization_Problem(params)
+    combined_score = math.sqrt(gate_error ** 2 + decomp_error ** 2)
+    return (combined_score, decomp_error, params)
 
 
 def _posmm_worker_init(Umtx, config, two_qbit_basis, qbit_num, rconstant):
@@ -359,16 +362,19 @@ class qgd_ApproximateSearch(qgd_TreeSearch):
             )
         try:
             for level in range(0, self.config['tree_level_max'] + 1):
-                adaptive_tolerance = self.calculate_tolerance(level)
                 previous_nodes += level_nodes
                 nodes_evaluated += len(level_nodes)
                 level_results = self.search_over_level(level_nodes, pool)
+                best_decomp_error = np.inf
                 for result in level_results:
-                    if result[0] < best_score:
-                        best_score = result[0]
-                        best_circuit = result[1]
-                        best_parameters = result[2]
-                if best_score < adaptive_tolerance:
+                    combined_score, decomp_error, circ, params = result
+                    if decomp_error < best_decomp_error:
+                        best_decomp_error = decomp_error
+                    if combined_score < best_score:
+                        best_score = combined_score
+                        best_circuit = circ
+                        best_parameters = params
+                if best_decomp_error < self.config['tolerance']:
                     break
                 new_level_nodes = []
                 for node in level_nodes:
@@ -387,31 +393,32 @@ class qgd_ApproximateSearch(qgd_TreeSearch):
         if pool is not None:
             worker_results = pool.map(_decompose_node_approx_worker, level_nodes)
             results = []
-            for node, (score, params) in zip(level_nodes, worker_results):
+            for node, (combined_score, decomp_error, params) in zip(level_nodes, worker_results):
                 circ = self.construct_circuit_from_node(node)
-                results.append([score, circ, params])
+                results.append([combined_score, decomp_error, circ, params])
             return results
         else:
             results = []
             for node in level_nodes:
-                cost_function, circ, params = self.decompose_single_node(node)
-                results.append([cost_function, circ, params])
+                combined_score, decomp_error, circ, params = self.decompose_single_node(node)
+                results.append([combined_score, decomp_error, circ, params])
             return results
 
     def decompose_single_node(self, node):
-        tolerance = self.calculate_tolerance(node.depth)
+        gate_error = self.calculate_tolerance(node.depth)
         ansatz = self.construct_circuit_from_node(node)
         cDecompose = N_Qubit_Decomposition_custom(self.Umtx, config=self.config)
         cDecompose.set_Verbose(0)
-        cDecompose.set_Optimization_Tolerance(tolerance)
+        cDecompose.set_Optimization_Tolerance(self.config['tolerance'])
         cDecompose.set_Cost_Function_Variant(3)
         cDecompose.set_Optimizer(self.config["optimizer"])
         cDecompose.set_Gate_Structure(ansatz)
         cDecompose.set_Optimized_Parameters(np.random.rand(ansatz.get_Parameter_Num()) * 2 * np.pi / 50)
         cDecompose.Start_Decomposition()
         params = cDecompose.get_Optimized_Parameters()
-        score = cDecompose.Optimization_Problem(params)
-        return score, ansatz, params
+        decomp_error = cDecompose.Optimization_Problem(params)
+        combined_score = math.sqrt(gate_error ** 2 + decomp_error ** 2)
+        return combined_score, decomp_error, ansatz, params
 
 
 class qgd_POSMMSearch(qgd_TreeSearch):
