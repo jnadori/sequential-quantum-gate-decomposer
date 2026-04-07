@@ -19,8 +19,6 @@ from squander.decomposition.qgd_Wide_Circuit_Optimization import qgd_Wide_Circui
 from squander.VQA.qgd_Variational_Quantum_Eigensolver_Base import qgd_Variational_Quantum_Eigensolver_Base as Variational_Quantum_Eigensolver
 from squander.VQA.qgd_Generative_Quantum_Machine_Learning_Base import qgd_Generative_Quantum_Machine_Learning_Base as Generative_Quantum_Machine_Learning
 
-from squander.synthesis.qgd_GraphSearch import qgd_TreeSearch as TreeSearch
-from squander.synthesis.qgd_GraphSearch import qgd_ApproximateSearch as ApproximateSearch
 #gates
 from squander.gates.gates_Wrapper import (
     Gate,
@@ -64,8 +62,7 @@ from squander.gates.qgd_Circuit import qgd_Circuit as Circuit
 
 #SABRE
 from squander.synthesis.qgd_SABRE import qgd_SABRE as SABRE
-from squander.synthesis.qgd_POSMM import qgd_POSMM_Decomposition as POSMM_Decomposition
-from squander.synthesis.qgd_GraphSearch import qgd_POSMMSearch as POSMMSearch
+
 
 # Qiskit IO
 from squander.IO_interfaces import Qiskit_IO
