@@ -25,6 +25,7 @@ limitations under the License.
 
 #include <Python.h>
 #include <numpy/arrayobject.h>
+#include "structmember.h"
 #include <stdio.h>
 #include "Variational_Quantum_Eigensolver_Base.h"
 
@@ -547,13 +548,6 @@ qgd_Variational_Quantum_Eigensolver_Base_Wrapper_get_Density_Matrix_Bridge_Metad
             }
 
             if (set_dict_item(op_dict, "index", PyLong_FromLong((long)idx)) != 0 ||
-                set_dict_item(
-                    op_dict,
-                    "operation_class",
-                    PyUnicode_FromString(
-                        operation.is_unitary ? "GateOperation" : "NoiseOperation"
-                    )
-                ) != 0 ||
                 set_dict_item(
                     op_dict,
                     "kind",
