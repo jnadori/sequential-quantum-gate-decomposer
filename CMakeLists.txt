@@ -479,7 +479,7 @@ elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Intel")
 
 elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
   # using Visual Studio C++
-  message("-- Using Visual Studio C++ compiler")
+  message("-- Using Visual Studio C++ compiler ")
 
   # Add /bigobj flag for large object files (needed for Windows compilation)
   # This flag is critical for files that generate large object files (like numpy_interface.cpp)
