@@ -66,6 +66,15 @@ SSKCache::SSKCache(int kernel_type, int wl_iterations,
 std::unordered_map<size_t, int> SSKCache::compute_wl_features(
     const int* tokens, int D) const {
 
+    // Bounds check: token values must be in [0, token_masks_.size())
+    for (int i = 0; i < D; ++i) {
+        if (tokens[i] < 0 || tokens[i] >= static_cast<int>(token_masks_.size())) {
+            std::cerr << "WL FATAL: token[" << i << "]=" << tokens[i]
+                      << " out of range [0," << token_masks_.size() << ")" << std::endl;
+            std::abort();
+        }
+    }
+
     // Build undirected adjacency: edge (i,j) if gates share a qubit
     std::vector<std::vector<int>> adj(D);
     for (int i = 0; i < D; ++i) {
@@ -487,8 +496,14 @@ void SSKCache::compute_cross_kernel_subset(
     if (n_sub == 0 || n_cand == 0) return;
 
     std::vector<double> inv_dr(n_sub);
-    for (int s = 0; s < n_sub; ++s)
+    for (int s = 0; s < n_sub; ++s) {
+        if (reg_subset[s] < 0 || reg_subset[s] >= static_cast<int>(wl_features_.size())) {
+            std::cerr << "WL FATAL: reg_subset[" << s << "]=" << reg_subset[s]
+                      << " out of range [0," << wl_features_.size() << ") size_=" << size_ << std::endl;
+            std::abort();
+        }
         inv_dr[s] = 1.0 / std::sqrt(std::max(raw_diags[reg_subset[s]], 1e-24));
+    }
 
     if (kernel_type_ == 1) {
         // --- WL cross-kernel ---
