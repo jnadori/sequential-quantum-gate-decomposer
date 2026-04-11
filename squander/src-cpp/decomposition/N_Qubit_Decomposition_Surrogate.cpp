@@ -1046,6 +1046,11 @@ GrayCode N_Qubit_Decomposition_Surrogate::local_search_acq(
 
     thread_local std::mt19937 local_rng(std::random_device{}());
 
+    if (gp.n_train == 0) {
+        if (steps_out) *steps_out = 0;
+        return start.copy();
+    }
+
     GrayCode current = start.copy();
 
     // Evaluate LCB at start
