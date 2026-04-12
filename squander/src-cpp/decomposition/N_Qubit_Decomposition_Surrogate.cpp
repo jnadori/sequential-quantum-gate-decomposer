@@ -1185,8 +1185,12 @@ GrayCode N_Qubit_Decomposition_Surrogate::local_search_acq(
             for (int i = 0; i < local_search_max_neighbors; ++i) {
                 std::uniform_int_distribution<int> sd(i, static_cast<int>(neighbors.size()) - 1);
                 int j = sd(local_rng);
-                std::swap(neighbors[i], neighbors[j]);
-                std::swap(neighbor_pos[i], neighbor_pos[j]);
+                if (i != j) {
+                    GrayCode tmp = neighbors[i].copy();
+                    neighbors[i] = neighbors[j];
+                    neighbors[j] = tmp;
+                    std::swap(neighbor_pos[i], neighbor_pos[j]);
+                }
             }
             neighbors.resize(local_search_max_neighbors);
             neighbor_pos.resize(local_search_max_neighbors);
