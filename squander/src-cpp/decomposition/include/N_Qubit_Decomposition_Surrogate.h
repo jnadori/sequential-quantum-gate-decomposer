@@ -45,42 +45,8 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
-#ifndef LAPACK_ROW_MAJOR
-#define LAPACK_ROW_MAJOR 101
-#endif
-
-#ifdef __cplusplus
-extern "C"
-{
-#endif
-int LAPACKE_dposv(int matrix_layout, char uplo, int n, int nrhs,
-                  double* A, int LDA, double* B, int LDB);
-int LAPACKE_dpotrf(int matrix_layout, char uplo, int n,
-                   double* A, int LDA);
-int LAPACKE_dtrtrs(int matrix_layout, char uplo, char trans, char diag,
-                   int n, int nrhs, const double* A, int LDA,
-                   double* B, int LDB);
-int LAPACKE_dtrtri(int matrix_layout, char uplo, char diag, int n,
-                   double* A, int LDA);
-int LAPACKE_dsteqr(int matrix_layout, char compz, int n,
-                   double* d, double* e, double* z, int ldz);
-void cblas_dgemm(int Order, int TransA, int TransB,
-                 int M, int N, int K,
-                 double alpha, const double* A, int lda,
-                 const double* B, int ldb,
-                 double beta, double* C, int ldc);
-#ifdef __cplusplus
-}
-#endif
-
-
-// ---------------------------------------------------------------------------
-// GrayCode hashing for use in unordered containers
-// (GrayCodeHash is defined in GrayCodeHash.h as GrayCodeHash_base<int>)
-// ---------------------------------------------------------------------------
-
-using GrayCodeSet = std::unordered_set<GrayCode, GrayCodeHash>;
-using GrayCodeMap = std::unordered_map<GrayCode, int, GrayCodeHash>;
+// LAPACKE declarations and GrayCodeSet/Map aliases live in GPRegressor.h,
+// which is included above.
 
 
 // ---------------------------------------------------------------------------
@@ -139,11 +105,6 @@ protected:
     GrayCode best_circuit;
     Matrix_real best_params;
 
-    // SSK kernel config
-    double sur_gap_decay;
-    double sur_match_decay;
-    int sur_ssk_order;
-
     // Search config
     double tolerance;
     int max_iters;
@@ -185,18 +146,7 @@ protected:
     double position_lambda;
     double position_temperature;  // softmax temperature override; -1.0 = use Quarl formula
 
-    // Random baseline mode (bypasses GP/Thompson sampling)
-    bool use_random_candidates;
-
-    // BOSS acquisition-guided GA
-    bool use_boss_ga;                // enable BOSS mode (default false)
-    int boss_pop_size;               // GA population size (default 200)
-    int boss_generations;            // GA generations per outer iteration (default 10)
-    double boss_offspring_ratio;     // offspring/population ratio (default 2.0)
-    int acquisition_function_type;   // 0=LCB, 1=Expected Improvement (default 0)
-
-    // Kernel type for GP surrogate
-    int kernel_type;      // 0=SSK, 1=Weisfeiler-Lehman (default 0)
+    // Weisfeiler-Lehman kernel config
     int wl_iterations;    // WL refinement rounds (default 3)
 
 
@@ -252,9 +202,9 @@ public:
     enum WindowResult { WINDOW_SUCCESS, WINDOW_STAGNATION, WINDOW_BUDGET };
 
     /// Run focused surrogate search within a D window [win_lo, win_hi].
-    /// Uses shared SSKCache/seen/X/y/all_params, fresh GP per window.
+    /// Uses shared WLKernelCache/seen/X/y/all_params, fresh GP per window.
     WindowResult run_window_search(int win_lo, int win_hi,
-        SSKCache& cache, GrayCodeSet& seen,
+        WLKernelCache& cache, GrayCodeSet& seen,
         std::vector<GrayCode>& X, std::vector<double>& y,
         std::vector<Matrix_real>& all_params,
         const std::string& log_file,
@@ -364,11 +314,19 @@ public:
     GrayCode crossover_uniform(const GrayCode& seq1, const GrayCode& seq2);
     GrayCode mutate_grow(const GrayCode& seq, int D_max);
     GrayCode mutate_shrink(const GrayCode& seq, int D_min);
-    GrayCode mutate_point_guided(const GrayCode& seq, SSKCache& cache,
+    GrayCode mutate_point_guided(const GrayCode& seq, WLKernelCache& cache,
                                  GPRegressor& gp, double scale);
 
+    // P2: Quantum-aware gate-rewriting mutations
+    /// Commute adjacent gates that act on disjoint qubit sets
+    GrayCode mutate_commute(const GrayCode& seq);
+    /// Cancel adjacent identical CNOT pairs (CX·CX = I)
+    GrayCode mutate_cancel_pairs(const GrayCode& seq);
+    /// Insert identity pair (g·g) at random position for structural escape
+    GrayCode mutate_insert_identity(const GrayCode& seq);
+
     /// Greedy local search on LCB acquisition
-    GrayCode local_search_acq(const GrayCode& start, SSKCache& cache,
+    GrayCode local_search_acq(const GrayCode& start, WLKernelCache& cache,
                               GPRegressor& gp, double scale,
                               int D_min_local = -1, int D_max_local = -1,
                               int* steps_out = nullptr);
@@ -378,7 +336,7 @@ public:
     void generate_candidates(const std::vector<GrayCode>& population,
                              const double* scores, int n_pop,
                              int n_candidates,
-                             SSKCache& cache, GPRegressor& gp, double scale,
+                             WLKernelCache& cache, GPRegressor& gp, double scale,
                              const double* train_y_norm,
                              GrayCodeSet& seen,
                              std::vector<GrayCode>& candidates_out,
@@ -389,28 +347,6 @@ public:
     // ---- Acquisition ----
 
     double lcb(double mu, double std_val) const { return mu - kappa * std_val; }
-
-    /// Expected Improvement acquisition function (negated so lower = better)
-    double expected_improvement(double mu, double std_val, double y_best) const;
-
-    /// BOSS acquisition-guided GA: optimizes acquisition via evolutionary search
-    void boss_acquisition_ga(
-        const std::vector<GrayCode>& seed_circuits,
-        const double* scores, int n_seeds,
-        int pop_size, int n_generations,
-        SSKCache& cache, GPRegressor& gp, double scale,
-        const std::vector<int>& train_indices, int n_train,
-        double y_best_norm,
-        GrayCodeSet& seen,
-        std::vector<GrayCode>& candidates_out,
-        int D_min_gen = -1, int D_max_gen = -1);
-
-    // ---- Standalone SSK Gram matrix ----
-
-    /// Compute full SSK Gram matrix for a list of circuits (variable-length)
-    static void ssk_gram_matrix(const std::vector<GrayCode>& circuits,
-                                double gap_decay, double match_decay, int order,
-                                double* K_out);
 };
 
 

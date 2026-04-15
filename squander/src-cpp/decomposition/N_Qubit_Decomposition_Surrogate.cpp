@@ -210,11 +210,6 @@ N_Qubit_Decomposition_Surrogate::N_Qubit_Decomposition_Surrogate(
         level_limit = static_cast<int>(ll);
     }
 
-    // SSK config
-    sur_gap_decay = 0.8;
-    sur_match_decay = 0.8;
-    sur_ssk_order = 3;
-
     // Search config
     kappa = 2.0;
     tolerance = 1e-8;
@@ -243,7 +238,6 @@ N_Qubit_Decomposition_Surrogate::N_Qubit_Decomposition_Surrogate(
     stagnation_window = 5;
     stagnation_improvement_frac = 0.25;
     config_D_start = -1;  // -1 = use OSR lower bound
-    use_random_candidates = false;
     adaptive_kappa = true;
     kappa_decay_rate = 0.5;
     kappa_stagnation_boost = 0.5;
@@ -251,15 +245,7 @@ N_Qubit_Decomposition_Surrogate::N_Qubit_Decomposition_Surrogate(
     position_lambda = 0.9;
     position_temperature = -1.0;
 
-    // BOSS acquisition-guided GA
-    use_boss_ga = false;
-    boss_pop_size = 200;
-    boss_generations = 10;
-    boss_offspring_ratio = 2.0;
-    acquisition_function_type = 0;  // 0=LCB, 1=EI
-
-    // Kernel type
-    kernel_type = 0;      // 0=SSK, 1=WL
+    // Weisfeiler-Lehman kernel refinement rounds
     wl_iterations = 3;
 
     // Helper lambdas to extract config values safely
@@ -302,17 +288,7 @@ N_Qubit_Decomposition_Surrogate::N_Qubit_Decomposition_Surrogate(
     // P3: clamp stagnation_window so the plateau detector can fire before patience cap
     if (stagnation_window >= window_patience)
         stagnation_window = std::max(3, window_patience / 3);
-    get_dbl("ssk_gap_decay",sur_gap_decay);
-    get_dbl("ssk_match_decay",sur_match_decay);
-    get_int("ssk_order",sur_ssk_order);
     get_int("D_start",config_D_start);
-
-
-
-    if (config.count("use_random_candidates") > 0) {
-        long long v; config["use_random_candidates"].get_property(v);
-        use_random_candidates = static_cast<bool>(v);
-    }
 
     if (config.count("adaptive_kappa") > 0) {
         long long v; config["adaptive_kappa"].get_property(v);
@@ -323,15 +299,6 @@ N_Qubit_Decomposition_Surrogate::N_Qubit_Decomposition_Surrogate(
     get_dbl("position_guided_fraction",position_guided_fraction);
     get_dbl("position_lambda",position_lambda);
     get_dbl("position_temperature",position_temperature);
-    if (config.count("use_boss_ga") > 0) {
-        long long v; config["use_boss_ga"].get_property(v);
-        use_boss_ga = static_cast<bool>(v);
-    }
-    get_int("boss_pop_size",boss_pop_size);
-    get_int("boss_generations",boss_generations);
-    get_int("acquisition_function",acquisition_function_type);
-    get_dbl("boss_offspring_ratio",boss_offspring_ratio);
-    get_int("kernel_type",kernel_type);
     get_int("wl_iterations",wl_iterations);
     // Edge-only tokenization (gate-based mode is in the GateLevel subclass)
     n_1q_types = 0;
@@ -781,7 +748,7 @@ GrayCode N_Qubit_Decomposition_Surrogate::mutate_point(const GrayCode& seq) {
 }
 
 GrayCode N_Qubit_Decomposition_Surrogate::mutate_point_guided(
-    const GrayCode& seq, SSKCache& cache, GPRegressor& gp, double scale) {
+    const GrayCode& seq, WLKernelCache& cache, GPRegressor& gp, double scale) {
 
     int D = static_cast<int>(seq.size());
     if (D < 1 || n_tokens < 2 || gp.n_train == 0) return mutate_point(seq);
@@ -1039,11 +1006,129 @@ GrayCode N_Qubit_Decomposition_Surrogate::mutate_shrink(const GrayCode& seq, int
 
 
 // ============================================================================
+// P2: Quantum-aware gate-rewriting mutations
+// ============================================================================
+
+GrayCode N_Qubit_Decomposition_Surrogate::mutate_commute(const GrayCode& seq) {
+    // Swap adjacent gates that act on disjoint qubit sets (they commute).
+    // This expands the structural orbit under unitary equivalence without
+    // changing the unitary itself — enables downstream mutations to reach
+    // basins that require a specific gate ordering.
+    int D = static_cast<int>(seq.size());
+    if (D < 2) return GrayCode();
+
+    // Collect all adjacent pairs that commute (disjoint qubit sets)
+    std::vector<int> commutable_positions;
+    for (int i = 0; i < D - 1; ++i) {
+        int mask_i = token_masks[seq[i]];
+        int mask_j = token_masks[seq[i + 1]];
+        if ((mask_i & mask_j) == 0)  // disjoint qubit sets
+            commutable_positions.push_back(i);
+    }
+
+    if (commutable_positions.empty()) return GrayCode();
+
+    std::uniform_int_distribution<int> pair_dist(0, static_cast<int>(commutable_positions.size()) - 1);
+    int pos = commutable_positions[pair_dist(gen)];
+
+    return retry_mutate([&](int) -> GrayCode {
+        GrayCode new_seq = seq.copy();
+        std::swap(new_seq[pos], new_seq[pos + 1]);
+        return canonicalize_and_validate(new_seq);
+    });
+}
+
+GrayCode N_Qubit_Decomposition_Surrogate::mutate_cancel_pairs(const GrayCode& seq) {
+    // Detect adjacent identical tokens (same CNOT edge in same direction).
+    // CX(a,b) · CX(a,b) = I, so the pair can be removed, reducing D by 2.
+    // Also handles longer sequences: scan for any identical adjacent pair
+    // that can commute to become adjacent (using mutate_commute first).
+    // For now: directly remove adjacent identical pairs.
+    int D = static_cast<int>(seq.size());
+    if (D < 2) return GrayCode();
+
+    // Find all adjacent identical pairs
+    std::vector<int> cancel_positions;
+    for (int i = 0; i < D - 1; ++i) {
+        if (seq[i] == seq[i + 1])
+            cancel_positions.push_back(i);
+    }
+
+    if (cancel_positions.empty()) {
+        // No direct pairs — try to commute a non-adjacent pair together
+        // Find two identical tokens separated by commuting gates
+        for (int i = 0; i < D - 1; ++i) {
+            for (int j = i + 1; j < D; ++j) {
+                if (seq[i] != seq[j]) continue;
+                // Check if all gates between i and j are disjoint from seq[i]
+                int mask_ij = token_masks[seq[i]];
+                bool all_disjoint = true;
+                for (int k = i + 1; k < j; ++k) {
+                    if (token_masks[seq[k]] & mask_ij) {
+                        all_disjoint = false;
+                        break;
+                    }
+                }
+                if (all_disjoint) {
+                    // Commute seq[j] down to position i+1, then cancel
+                    GrayCode new_seq = seq.copy();
+                    // Bubble seq[j] down to position i+1
+                    for (int k = j; k > i + 1; --k)
+                        std::swap(new_seq[k], new_seq[k - 1]);
+                    // Now new_seq[i] == new_seq[i+1], remove both
+                    GrayCode result = new_seq.remove_Digit(i);
+                    result = result.remove_Digit(i);  // i+1 shifted to i after first removal
+                    return canonicalize_and_validate(result);
+                }
+            }
+        }
+        return GrayCode();
+    }
+
+    // Remove a random adjacent identical pair
+    std::uniform_int_distribution<int> pair_dist(0, static_cast<int>(cancel_positions.size()) - 1);
+    int pos = cancel_positions[pair_dist(gen)];
+
+    GrayCode new_seq = seq.remove_Digit(pos);
+    new_seq = new_seq.remove_Digit(pos);  // pos+1 shifted to pos after first removal
+    return canonicalize_and_validate(new_seq);
+}
+
+GrayCode N_Qubit_Decomposition_Surrogate::mutate_insert_identity(const GrayCode& seq) {
+    // Insert a g·g pair (identity) at a random position.
+    // This enables downstream commutation to rearrange gate order,
+    // then pair cancellation can remove a different gate — effectively
+    // performing a structural rewrite that's unreachable by point mutation.
+    int D = static_cast<int>(seq.size());
+    if (D < 2 || n_tokens < 1) return GrayCode();
+
+    std::uniform_int_distribution<int> token_dist(0, n_tokens - 1);
+    std::uniform_int_distribution<int> pos_dist(0, D);
+
+    return retry_mutate([&](int) -> GrayCode {
+        int token = token_dist(gen);
+        int pos = pos_dist(gen);
+
+        // Build sequence: seq[0..pos-1] + token + token + seq[pos..D-1]
+        matrix_base<int> limits(1, D + 2);
+        for (int i = 0; i < D + 2; ++i) limits[i] = n_tokens;
+        GrayCode new_seq(0, limits);
+        for (int i = 0; i < pos; ++i) new_seq[i] = seq[i];
+        new_seq[pos] = token;
+        new_seq[pos + 1] = token;
+        for (int i = pos; i < D; ++i) new_seq[i + 2] = seq[i];
+
+        return canonicalize_and_validate(new_seq);
+    });
+}
+
+
+// ============================================================================
 // Local search on LCB acquisition
 // ============================================================================
 
 GrayCode N_Qubit_Decomposition_Surrogate::local_search_acq(
-    const GrayCode& start, SSKCache& cache, GPRegressor& gp,
+    const GrayCode& start, WLKernelCache& cache, GPRegressor& gp,
     double scale,
     int D_min_local, int D_max_local, int* steps_out) {
 
@@ -1326,397 +1411,12 @@ GrayCode N_Qubit_Decomposition_Surrogate::local_search_acq(
 
 
 // ============================================================================
-// Normal distribution helpers and Expected Improvement
-// ============================================================================
-
-static double normal_cdf(double x) {
-    // Rational approximation (Abramowitz & Stegun 26.2.17)
-    // Maximum error: 1.5e-7
-    static const double b1 =  0.319381530;
-    static const double b2 = -0.356563782;
-    static const double b3 =  1.781477937;
-    static const double b4 = -1.821255978;
-    static const double b5 =  1.330274429;
-    static const double p  =  0.2316419;
-    double sign = (x < 0) ? -1.0 : 1.0;
-    x = std::fabs(x) / std::sqrt(2.0);
-    double t = 1.0 / (1.0 + p * x);
-    double y = 1.0 - (((((b5 * t + b4) * t) + b3) * t + b2) * t + b1) * t *
-               std::exp(-x * x);
-    return 0.5 * (1.0 + sign * y);
-}
-
-static double normal_pdf(double x) {
-    return std::exp(-0.5 * x * x) / std::sqrt(2.0 * M_PI);
-}
-
-double N_Qubit_Decomposition_Surrogate::expected_improvement(
-    double mu, double std_val, double y_best) const {
-    // EI = (y_best - mu) * Phi(Z) + sigma * phi(Z),  Z = (y_best - mu) / sigma
-    // Negated so lower = better (consistent with LCB convention)
-    if (std_val < 1e-12) return 0.0;
-    double z = (y_best - mu) / std_val;
-    double ei = (y_best - mu) * normal_cdf(z) + std_val * normal_pdf(z);
-    return -ei;  // negate: lower is better
-}
-
-
-// ============================================================================
-// BOSS acquisition-guided GA
-// ============================================================================
-
-void N_Qubit_Decomposition_Surrogate::boss_acquisition_ga(
-    const std::vector<GrayCode>& seed_circuits,
-    const double* scores, int n_seeds,
-    int pop_size, int n_generations,
-    SSKCache& cache, GPRegressor& gp, double scale,
-    const std::vector<int>& train_indices, int n_train,
-    double y_best_norm,
-    GrayCodeSet& seen,
-    std::vector<GrayCode>& candidates_out,
-    int D_min_gen, int D_max_gen) {
-
-    bool mixed_d = (D_min_gen >= 0 && D_max_gen >= 0);
-    int n_t = gp.n_train;
-
-    // Helper: compute acquisition for a batch of circuits
-    auto batch_acquisition = [&](const std::vector<GrayCode>& circs,
-                                 std::vector<double>& acq_out,
-                                 std::vector<double>& mu_out) {
-        int nc = static_cast<int>(circs.size());
-        if (nc == 0) return;
-        acq_out.resize(nc);
-        mu_out.resize(nc);
-
-        // Cross-kernel
-        std::vector<double> Ks(n_t * nc);
-        cache.compute_cross_kernel_subset(circs, scale, train_indices, Ks.data());
-
-        // mu = Ks^T @ alpha
-        for (int j = 0; j < nc; ++j) {
-            double mu_val = 0.0;
-            for (int i = 0; i < n_t; ++i)
-                mu_val += Ks[i * nc + j] * gp.alpha_data[i];
-            mu_out[j] = mu_val;
-        }
-
-        // Variance + acquisition
-        if (gp.love_valid && gp.love_rank > 0) {
-            // LOVE fast variance: O(n * r * nc)
-            for (int j = 0; j < nc; ++j) {
-                double sum_rt_ks_sq = 0.0;
-                for (int k = 0; k < gp.love_rank; ++k) {
-                    double rt_ks_k = 0.0;
-                    for (int i = 0; i < n_t; ++i)
-                        rt_ks_k += gp.R_love[i * gp.love_rank + k] * Ks[i * nc + j];
-                    sum_rt_ks_sq += rt_ks_k * rt_ks_k;
-                }
-                double std_val = std::sqrt(std::max(scale - sum_rt_ks_sq, 1e-10));
-                if (acquisition_function_type == 1) {
-                    acq_out[j] = expected_improvement(mu_out[j], std_val, y_best_norm);
-                } else {
-                    acq_out[j] = lcb(mu_out[j], std_val);
-                }
-            }
-        } else {
-            // Exact fallback: forward solve v = L^{-1} Ks
-            std::vector<double> v(Ks);
-            LAPACKE_dtrtrs(LAPACK_ROW_MAJOR, 'L', 'N', 'N',
-                           n_t, nc, gp.L_data.data(), n_t,
-                           v.data(), nc);
-            for (int j = 0; j < nc; ++j) {
-                double sum_v2 = 0.0;
-                for (int i = 0; i < n_t; ++i)
-                    sum_v2 += v[i * nc + j] * v[i * nc + j];
-                double std_val = std::sqrt(std::max(scale - sum_v2, 1e-10));
-                if (acquisition_function_type == 1) {
-                    acq_out[j] = expected_improvement(mu_out[j], std_val, y_best_norm);
-                } else {
-                    acq_out[j] = lcb(mu_out[j], std_val);
-                }
-            }
-        }
-    };
-
-    // ---- Population initialization ----
-    struct Individual {
-        GrayCode circuit;
-        double acq_value;
-        double mu;
-    };
-
-    std::vector<Individual> population;
-    population.reserve(pop_size);
-    GrayCodeSet pop_seen;  // dedup within population
-
-    // Phase A: seed from observed circuits (top 50% by score)
-    int n_seed_target = pop_size / 2;
-
-    // Sort seed indices by score (best first)
-    std::vector<int> seed_order(n_seeds);
-    std::iota(seed_order.begin(), seed_order.end(), 0);
-    std::sort(seed_order.begin(), seed_order.end(),
-              [&](int a, int b) { return scores[a] < scores[b]; });
-
-    for (int si = 0; si < n_seeds && static_cast<int>(population.size()) < n_seed_target; ++si) {
-        int idx = seed_order[si];
-        const GrayCode& seed = seed_circuits[idx];
-
-        // Mutate once for diversity
-        GrayCode mutated = mutate_point(seed);
-        GrayCode cand = (mutated.size() > 0) ? mutated : seed.copy();
-
-        if (mixed_d && (static_cast<int>(cand.size()) < D_min_gen ||
-                        static_cast<int>(cand.size()) > D_max_gen)) continue;
-        if (pop_seen.find(cand) != pop_seen.end()) continue;
-        if (seen.find(cand) != seen.end()) {
-            // Use the seed directly if mutated version is already seen
-            cand = seed.copy();
-            if (mixed_d && (static_cast<int>(cand.size()) < D_min_gen ||
-                            static_cast<int>(cand.size()) > D_max_gen)) continue;
-            if (pop_seen.find(cand) != pop_seen.end()) continue;
-        }
-
-        pop_seen.insert(cand.copy());
-        population.push_back({cand.copy(), 0.0, 0.0});
-    }
-
-    // Phase B: fill rest with random circuits
-    int n_random = pop_size - static_cast<int>(population.size());
-    if (mixed_d) {
-        // Build D distribution weighted by 1/D
-        int n_D = D_max_gen - D_min_gen + 1;
-        std::vector<double> d_weights(n_D);
-        double w_sum = 0;
-        for (int i = 0; i < n_D; ++i) {
-            d_weights[i] = 1.0 / (D_min_gen + i);
-            w_sum += d_weights[i];
-        }
-        for (int i = 0; i < n_D; ++i) d_weights[i] /= w_sum;
-        std::vector<double> d_cdf(n_D);
-        d_cdf[0] = d_weights[0];
-        for (int i = 1; i < n_D; ++i) d_cdf[i] = d_cdf[i - 1] + d_weights[i];
-
-        std::uniform_real_distribution<double> uni(0.0, 1.0);
-        for (int attempt = 0;
-             static_cast<int>(population.size()) < pop_size && attempt < n_random * 50;
-             ++attempt) {
-            double r = uni(gen);
-            int D_val = D_max_gen;
-            for (int i = 0; i < n_D; ++i) {
-                if (r <= d_cdf[i]) { D_val = D_min_gen + i; break; }
-            }
-            GrayCode seq = generate_valid_sequence(D_val);
-            if (seq.size() > 0 && pop_seen.find(seq) == pop_seen.end()) {
-                pop_seen.insert(seq.copy());
-                population.push_back({seq.copy(), 0.0, 0.0});
-            }
-        }
-    } else {
-        // Fixed D: use D from first seed or default
-        int D = (n_seeds > 0) ? static_cast<int>(seed_circuits[0].size()) : 3;
-        for (int attempt = 0;
-             static_cast<int>(population.size()) < pop_size && attempt < n_random * 50;
-             ++attempt) {
-            GrayCode seq = generate_valid_sequence(D);
-            if (seq.size() > 0 && pop_seen.find(seq) == pop_seen.end()) {
-                pop_seen.insert(seq.copy());
-                population.push_back({seq.copy(), 0.0, 0.0});
-            }
-        }
-    }
-
-    if (population.empty()) return;
-
-    int actual_pop = static_cast<int>(population.size());
-
-    // Batch-evaluate initial population
-    {
-        std::vector<GrayCode> pop_circuits;
-        pop_circuits.reserve(actual_pop);
-        for (auto& ind : population) pop_circuits.push_back(ind.circuit.copy());
-
-        std::vector<double> acq_vals, mu_vals;
-        batch_acquisition(pop_circuits, acq_vals, mu_vals);
-
-        for (int i = 0; i < actual_pop; ++i) {
-            population[i].acq_value = acq_vals[i];
-            population[i].mu = mu_vals[i];
-        }
-    }
-
-    // ---- GA loop ----
-    std::uniform_real_distribution<double> op_dist(0.0, 1.0);
-    std::uniform_int_distribution<int> pop_dist(0, actual_pop - 1);
-    int t_size = std::min(tournament_size, actual_pop);
-
-    // Acquisition-guided tournament selection
-    auto acq_tournament = [&]() -> int {
-        int best = pop_dist(gen);
-        for (int i = 1; i < t_size; ++i) {
-            int idx = pop_dist(gen);
-            if (population[idx].acq_value < population[best].acq_value)
-                best = idx;
-        }
-        return best;
-    };
-
-    for (int ga_gen = 0; ga_gen < n_generations; ++ga_gen) {
-        int n_offspring = static_cast<int>(actual_pop * boss_offspring_ratio);
-
-        // Generate offspring via acquisition-guided selection + evolutionary operators
-        GrayCodeSet offspring_seen;
-        std::vector<GrayCode> offspring_circuits;
-        offspring_circuits.reserve(n_offspring);
-
-        int max_attempts = n_offspring * 10;
-        for (int attempt = 0;
-             static_cast<int>(offspring_circuits.size()) < n_offspring && attempt < max_attempts;
-             ++attempt) {
-            double r = op_dist(gen);
-            GrayCode result;
-
-            if (r < 0.25) {
-                // Point mutation
-                int p = acq_tournament();
-                result = mutate_point(population[p].circuit);
-            } else if (r < 0.40) {
-                // Block mutation
-                int p = acq_tournament();
-                int adaptive_blk = std::max(block_size,
-                    static_cast<int>(population[p].circuit.size()) / 4);
-                result = mutate_block_regenerate(population[p].circuit, adaptive_blk);
-            } else if (r < 0.60) {
-                // Crossover or transplant
-                int p1 = acq_tournament();
-                int p2 = acq_tournament();
-                if (population[p1].circuit.size() == population[p2].circuit.size()) {
-                    result = crossover_uniform(population[p1].circuit, population[p2].circuit);
-                } else {
-                    int adaptive_blk = std::max(block_size,
-                        std::min(static_cast<int>(population[p1].circuit.size()),
-                                 static_cast<int>(population[p2].circuit.size())) / 4);
-                    result = mutate_transplant(population[p1].circuit, population[p2].circuit,
-                                               adaptive_blk);
-                }
-            } else if (r < 0.75) {
-                // Transplant
-                int p1 = acq_tournament();
-                int p2 = acq_tournament();
-                int adaptive_blk = std::max(block_size,
-                    std::min(static_cast<int>(population[p1].circuit.size()),
-                             static_cast<int>(population[p2].circuit.size())) / 4);
-                result = mutate_transplant(population[p1].circuit, population[p2].circuit,
-                                           adaptive_blk);
-            } else if (r < 0.85 && mixed_d) {
-                // Grow
-                int p = acq_tournament();
-                result = mutate_grow(population[p].circuit, D_max_gen);
-            } else if (r < 0.95 && mixed_d) {
-                // Shrink
-                int p = acq_tournament();
-                result = mutate_shrink(population[p].circuit, D_min_gen);
-            } else {
-                // Random injection
-                if (mixed_d) {
-                    std::geometric_distribution<int> geo(0.4);
-                    int rand_D = D_min_gen + std::min(geo(gen), D_max_gen - D_min_gen);
-                    result = generate_valid_sequence(rand_D);
-                } else {
-                    int D = (n_seeds > 0) ? static_cast<int>(seed_circuits[0].size()) : 3;
-                    result = generate_valid_sequence(D);
-                }
-            }
-
-            if (result.size() > 0 &&
-                offspring_seen.find(result) == offspring_seen.end() &&
-                (!mixed_d || (static_cast<int>(result.size()) >= D_min_gen &&
-                              static_cast<int>(result.size()) <= D_max_gen))) {
-                offspring_seen.insert(result.copy());
-                offspring_circuits.push_back(result.copy());
-            }
-        }
-
-        if (offspring_circuits.empty()) continue;
-
-        // Batch-evaluate offspring acquisition
-        int n_off = static_cast<int>(offspring_circuits.size());
-        std::vector<double> off_acq, off_mu;
-        batch_acquisition(offspring_circuits, off_acq, off_mu);
-
-        // (mu + lambda) replacement: merge parents + offspring, keep top pop_size
-        // Sort indices only — avoids sorting a container of GrayCodes directly
-        int n_combined = actual_pop + n_off;
-        std::vector<int> order(n_combined);
-        std::iota(order.begin(), order.end(), 0);
-        std::sort(order.begin(), order.end(), [&](int a, int b) {
-            double av = (a < actual_pop) ? population[a].acq_value : off_acq[a - actual_pop];
-            double bv = (b < actual_pop) ? population[b].acq_value : off_acq[b - actual_pop];
-            return av < bv;
-        });
-
-        // Build new population in sorted order, then swap
-        int new_pop = std::min(pop_size, n_combined);
-        std::vector<Individual> new_population;
-        new_population.reserve(new_pop);
-        GrayCodeSet new_pop_seen;
-        for (int i = 0; i < new_pop; ++i) {
-            int idx = order[i];
-            if (idx < actual_pop) {
-                new_pop_seen.insert(population[idx].circuit.copy());
-                new_population.push_back({population[idx].circuit.copy(),
-                                          population[idx].acq_value, population[idx].mu});
-            } else {
-                int oi = idx - actual_pop;
-                new_pop_seen.insert(offspring_circuits[oi].copy());
-                new_population.push_back({offspring_circuits[oi].copy(),
-                                          off_acq[oi], off_mu[oi]});
-            }
-        }
-        population = std::move(new_population);
-        pop_seen = std::move(new_pop_seen);
-        actual_pop = new_pop;
-
-        // Update pop_dist range
-        pop_dist = std::uniform_int_distribution<int>(0, actual_pop - 1);
-    }
-
-    // ---- Final output: top candidates with diversity filtering ----
-    int n_pick = std::min(n_thompson_samples, actual_pop);
-
-    for (int pick = 0; pick < n_pick; ++pick) {
-        // Walk through population sorted by acquisition (already sorted)
-        bool found = false;
-        for (int sidx = 0; sidx < actual_pop; ++sidx) {
-            if (seen.find(population[sidx].circuit) != seen.end()) continue;
-
-            // On-demand SSK diversity check
-            bool too_similar = false;
-            if (!candidates_out.empty() && diversity_thresh < 1.0) {
-                for (int prev = 0; prev < static_cast<int>(candidates_out.size()); ++prev) {
-                    double k_val = cache.kernel_between(population[sidx].circuit, candidates_out[prev]);
-                    if (k_val > diversity_thresh) { too_similar = true; break; }
-                }
-            }
-
-            if (!too_similar) {
-                candidates_out.push_back(population[sidx].circuit.copy());
-                found = true;
-                break;
-            }
-        }
-        if (!found) break;
-    }
-}
-
-
-// ============================================================================
 // Candidate generation
 // ============================================================================
 
 void N_Qubit_Decomposition_Surrogate::generate_candidates(
     const std::vector<GrayCode>& population, const double* scores, int n_pop,
-    int n_candidates, SSKCache& cache, GPRegressor& gp, double scale,
+    int n_candidates, WLKernelCache& cache, GPRegressor& gp, double scale,
     const double* train_y_norm,
     GrayCodeSet& seen, std::vector<GrayCode>& candidates_out,
     int& n_local_out, double& avg_steps_out,
@@ -1904,31 +1604,43 @@ void N_Qubit_Decomposition_Surrogate::generate_candidates(
             }
             else if (r < 0.65)
                 result = mutate_grow(tournament_select(), D_max_gen);
+            else if (r < 0.70)
+                result = mutate_commute(tournament_select());
+            else if (r < 0.75)
+                result = mutate_cancel_pairs(tournament_select());
             else if (r < 0.80)
                 result = mutate_shrink(tournament_select(), D_min_gen);
             else if (r < 0.85)
                 result = mutate_block(tournament_select(), block_size);
+            else if (r < 0.90)
+                result = mutate_insert_identity(tournament_select());
             else {
                 std::geometric_distribution<int> geo(0.4);
                 int rand_D = D_min_gen + std::min(geo(gen), D_max_gen - D_min_gen);
                 result = generate_valid_sequence(rand_D);
             }
         } else {
-            if (r < 0.15)
+            if (r < 0.13)
                 result = maybe_guided_point(tournament_select());
-            else if (r < 0.20)
+            else if (r < 0.18)
                 result = mutate_swap(tournament_select());
-            else if (r < 0.38)
+            else if (r < 0.33)
                 result = mutate_block_regenerate(tournament_select(), adaptive_blk);
-            else if (r < 0.60) {
+            else if (r < 0.53) {
                 const GrayCode& p1 = tournament_select();
                 const GrayCode& p2 = tournament_select();
                 result = mutate_transplant(p1, p2, adaptive_blk);
             }
-            else if (r < 0.70)
+            else if (r < 0.63)
                 result = crossover_uniform(tournament_select(), tournament_select());
-            else if (r < 0.75)
+            else if (r < 0.68)
+                result = mutate_commute(tournament_select());
+            else if (r < 0.73)
+                result = mutate_cancel_pairs(tournament_select());
+            else if (r < 0.78)
                 result = mutate_block(tournament_select(), block_size);
+            else if (r < 0.83)
+                result = mutate_insert_identity(tournament_select());
             else {
                 int D = static_cast<int>(population[0].size());
                 result = generate_valid_sequence(D);
@@ -2173,29 +1885,6 @@ void N_Qubit_Decomposition_Surrogate::parallel_decompose_batch_with_init(
 
 
 // ============================================================================
-// Standalone SSK Gram matrix
-// ============================================================================
-
-void N_Qubit_Decomposition_Surrogate::ssk_gram_matrix(
-    const std::vector<GrayCode>& circuits, double gap_decay_in,
-    double match_decay_in, int order_in, double* K_out) {
-
-    SSKCache temp_cache(gap_decay_in, match_decay_in, order_in);
-    int n = static_cast<int>(circuits.size());
-
-    // Register all circuits
-    for (int i = 0; i < n; ++i)
-        temp_cache.register_circuit(circuits[i]);
-
-    // Extract normalized kernel matrix
-    double scale = 1.0;
-    for (int i = 0; i < n; ++i)
-        for (int j = 0; j < n; ++j)
-            K_out[i * n + j] = temp_cache.K_norm[i * temp_cache.capacity_ + j];
-}
-
-
-// ============================================================================
 // Main search methods
 // ============================================================================
 
@@ -2221,7 +1910,7 @@ void N_Qubit_Decomposition_Surrogate::search_over_D_range(
         flog << "---" << std::endl;
     }
 
-    // Persistent state across all D values (but SSKCache is rebuilt per D)
+    // Persistent state across all D values (but WLKernelCache is rebuilt per D)
     GrayCodeSet seen;
     std::vector<GrayCode> X;
     std::vector<double> y;
@@ -2308,7 +1997,7 @@ void N_Qubit_Decomposition_Surrogate::search_over_D_range(
             break;
         }
 
-        // --- Build fresh SSKCache for this D ---
+        // --- Build fresh WLKernelCache for this D ---
         // Register only the top 2*gp_max_train circuits by score (bounded cache)
         int d_filter = std::max(1, D - 1);
         std::vector<int> cache_candidates;
@@ -2321,14 +2010,13 @@ void N_Qubit_Decomposition_Surrogate::search_over_D_range(
         int cache_limit = std::min(static_cast<int>(cache_candidates.size()),
                                    2 * gp_max_train);
 
-        SSKCache ssk_cache(kernel_type, wl_iterations, token_masks,
-                           sur_gap_decay, sur_match_decay, sur_ssk_order);
+        WLKernelCache wl_cache(wl_iterations, token_masks);
         for (int ci = 0; ci < cache_limit; ++ci)
-            ssk_cache.register_circuit(X[cache_candidates[ci]]);
+            wl_cache.register_circuit(X[cache_candidates[ci]]);
 
         // --- Run search at this D ---
         WindowResult result = run_window_search(D, D,
-            ssk_cache, seen, X, y, all_params, log_file);
+            wl_cache, seen, X, y, all_params, log_file);
 
         if (result == WINDOW_SUCCESS) {
             std::ofstream flog(log_file, std::ios::app);
@@ -2485,48 +2173,100 @@ void N_Qubit_Decomposition_Surrogate::compress_over_D_range(
             continue;
         }
 
-        // --- Phase 1: Systematic single-gate removal from best D+1 circuit ---
+        // --- Phase 1: Systematic single-gate removal from top-K D+1 circuits ---
+        // P4: use top-K parent circuits (K=10) instead of single best,
+        // so different parent structures contribute different removable gates.
         {
             bool early_solution = false;
-            int best_dplus1_idx = -1;
-            double best_dplus1_score = std::numeric_limits<double>::infinity();
+
+            // Collect all D+1 circuits, sorted by score (best first)
+            std::vector<int> dplus1_indices;
             for (size_t i = 0; i < X.size(); ++i) {
-                if (static_cast<int>(X[i].size()) == D + 1 && y[i] < best_dplus1_score) {
-                    best_dplus1_score = y[i];
-                    best_dplus1_idx = static_cast<int>(i);
-                }
+                if (static_cast<int>(X[i].size()) == D + 1)
+                    dplus1_indices.push_back(static_cast<int>(i));
             }
+            std::sort(dplus1_indices.begin(), dplus1_indices.end(),
+                [&y](int a, int b) { return y[a] < y[b]; });
 
-            if (best_dplus1_idx >= 0) {
-                const GrayCode& best_dplus1 = X[best_dplus1_idx];
-                int D_plus1 = static_cast<int>(best_dplus1.size());
+            // Take top K parents (K=10)
+            const int phase1_topk = 10;
+            int n_parents = std::min(static_cast<int>(dplus1_indices.size()), phase1_topk);
 
-                std::vector<GrayCode> removal_candidates;
-                std::vector<int> removal_positions;  // track which gate position was removed
-                for (int pos = 0; pos < D_plus1; ++pos) {
-                    GrayCode shortened = best_dplus1.remove_Digit(pos);
-                    GrayCode result = canonicalize_and_validate(shortened);
-                    if (result.size() > 0 && seen.find(result) == seen.end()) {
-                        seen.insert(result.copy());
-                        removal_candidates.push_back(std::move(result));
-                        removal_positions.push_back(pos);
+            if (n_parents > 0) {
+                // P1: compute triviality score for a gate position from parent's params
+                auto triviality_score = [](const Matrix_real& params, int pos) -> double {
+                    double total = 0.0;
+                    for (int p = 0; p < 6; ++p) {
+                        double theta = params[pos * 6 + p];
+                        double k = std::round(theta / (M_PI / 2.0));
+                        total += std::abs(theta - k * M_PI / 2.0);
                     }
+                    return total;
+                };
+
+                struct RemovalEntry {
+                    GrayCode circuit;
+                    int position;
+                    double triviality;
+                    int parent_idx;  // index into dplus1_indices
+                };
+                std::vector<RemovalEntry> removal_entries;
+
+                for (int pi = 0; pi < n_parents; ++pi) {
+                    int parent_x_idx = dplus1_indices[pi];
+                    const GrayCode& parent_circ = X[parent_x_idx];
+                    int D_plus1 = static_cast<int>(parent_circ.size());
+                    const Matrix_real& parent_params = all_params[parent_x_idx];
+
+                    for (int pos = 0; pos < D_plus1; ++pos) {
+                        GrayCode shortened = parent_circ.remove_Digit(pos);
+                        GrayCode result = canonicalize_and_validate(shortened);
+                        if (result.size() > 0 && seen.find(result) == seen.end()) {
+                            seen.insert(result.copy());
+                            removal_entries.push_back({std::move(result), pos,
+                                                       triviality_score(parent_params, pos), pi});
+                        }
+                    }
+                }
+
+                // Sort: prioritize by parent rank (best first), then by triviality within each parent
+                std::stable_sort(removal_entries.begin(), removal_entries.end(),
+                    [](const RemovalEntry& a, const RemovalEntry& b) {
+                        if (a.parent_idx != b.parent_idx) return a.parent_idx < b.parent_idx;
+                        return a.triviality < b.triviality;
+                    });
+
+                // Extract sorted vectors
+                std::vector<GrayCode> removal_candidates;
+                std::vector<int> removal_positions;
+                std::vector<int> removal_parent_x_idx;  // which parent each candidate came from
+                removal_candidates.reserve(removal_entries.size());
+                removal_positions.reserve(removal_entries.size());
+                removal_parent_x_idx.reserve(removal_entries.size());
+                for (auto& e : removal_entries) {
+                    removal_candidates.push_back(std::move(e.circuit));
+                    removal_positions.push_back(e.position);
+                    removal_parent_x_idx.push_back(dplus1_indices[e.parent_idx]);
                 }
 
                 {
                     std::ofstream flog(log_file, std::ios::app);
                     flog << "\n=== D=" << D << " Phase 1: trying "
-                         << removal_candidates.size() << " single-gate removals (from D="
-                         << D_plus1 << " best, score=" << best_dplus1_score << ") ===" << std::endl;
+                         << removal_candidates.size() << " single-gate removals from "
+                         << n_parents << " parent(s) (best score=" << y[dplus1_indices[0]]
+                         << ", sorted by triviality) ===" << std::endl;
                 }
 
                 if (!removal_candidates.empty()) {
                     // Build warm-start params by excising the 6 params of the removed gate
+                    // from the correct parent for each candidate
                     std::vector<Matrix_real> warmstart_params;
                     warmstart_params.reserve(removal_candidates.size());
                     for (int ri = 0; ri < static_cast<int>(removal_candidates.size()); ++ri) {
+                        int px_idx = removal_parent_x_idx[ri];
+                        int D_plus1 = static_cast<int>(X[px_idx].size());
                         warmstart_params.push_back(
-                            excise_gate_params(all_params[best_dplus1_idx], D_plus1, removal_positions[ri]));
+                            excise_gate_params(all_params[px_idx], D_plus1, removal_positions[ri]));
                     }
 
                     std::vector<DecompResult> dec_results;
@@ -2655,7 +2395,7 @@ void N_Qubit_Decomposition_Surrogate::compress_over_D_range(
             continue;  // try compressing further
         }
 
-        // Build fresh SSKCache for this D (same-D only)
+        // Build fresh WLKernelCache for this D (same-D only)
         std::vector<int> cache_candidates;
         for (size_t i = 0; i < X.size(); ++i)
             if (static_cast<int>(X[i].size()) == D)
@@ -2666,14 +2406,13 @@ void N_Qubit_Decomposition_Surrogate::compress_over_D_range(
 
         int cache_limit = std::min(static_cast<int>(cache_candidates.size()), 2 * gp_max_train);
 
-        SSKCache ssk_cache(kernel_type, wl_iterations, token_masks,
-                           sur_gap_decay, sur_match_decay, sur_ssk_order);
+        WLKernelCache wl_cache(wl_iterations, token_masks);
         for (int ci = 0; ci < cache_limit; ++ci)
-            ssk_cache.register_circuit(X[cache_candidates[ci]]);
+            wl_cache.register_circuit(X[cache_candidates[ci]]);
 
         // Run window search at this D
         WindowResult result = run_window_search(D, D,
-            ssk_cache, seen, X, y, all_params, log_file);
+            wl_cache, seen, X, y, all_params, log_file);
 
         if (result == WINDOW_SUCCESS) {
             // Solution found at this D, keep compressing
@@ -2739,13 +2478,12 @@ void N_Qubit_Decomposition_Surrogate::compress_over_D_range(
                       [&y](int a, int b) { return y[a] < y[b]; });
             int cache_limit2 = std::min(static_cast<int>(cache_candidates2.size()), 2 * gp_max_train);
 
-            SSKCache ssk_cache2(kernel_type, wl_iterations, token_masks,
-                               sur_gap_decay, sur_match_decay, sur_ssk_order);
+            WLKernelCache wl_cache2(wl_iterations, token_masks);
             for (int ci = 0; ci < cache_limit2; ++ci)
-                ssk_cache2.register_circuit(X[cache_candidates2[ci]]);
+                wl_cache2.register_circuit(X[cache_candidates2[ci]]);
 
             WindowResult result2 = run_window_search(D, D,
-                ssk_cache2, seen, X, y, all_params, log_file,
+                wl_cache2, seen, X, y, all_params, log_file,
                 window_patience / 3);
 
             if (result2 == WINDOW_SUCCESS) {
@@ -2788,7 +2526,7 @@ void N_Qubit_Decomposition_Surrogate::compress_over_D_range(
 N_Qubit_Decomposition_Surrogate::WindowResult
 N_Qubit_Decomposition_Surrogate::run_window_search(
     int win_lo, int win_hi,
-    SSKCache& ssk_cache, GrayCodeSet& seen,
+    WLKernelCache& wl_cache, GrayCodeSet& seen,
     std::vector<GrayCode>& X, std::vector<double>& y,
     std::vector<Matrix_real>& all_params,
     const std::string& log_file,
@@ -2844,7 +2582,7 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
                 attempts++;
                 if (seq.size() > 0 && seen.find(seq) == seen.end()) {
                     seen.insert(seq.copy());
-                    ssk_cache.register_circuit(seq);
+                    wl_cache.register_circuit(seq);
                     batch_circuits.push_back(std::move(seq));
                 }
             }
@@ -2939,7 +2677,7 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
     for (int itr = 0; itr < window_max_iters; ++itr) {
 
         // Adaptive kappa: decay over iterations, boost on stagnation
-        if (adaptive_kappa && window_max_iters > 0 && acquisition_function_type != 1) {
+        if (adaptive_kappa && window_max_iters > 0) {
             double progress = static_cast<double>(itr) / window_max_iters;
             double base = 1.0 - kappa_decay_rate * progress;
             double stagnation = 0.0;
@@ -2958,44 +2696,6 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
         std::vector<int> selected_indices;
         std::vector<double> gp_mu_selected;  // GP predicted mu for rank correlation
 
-        if (use_random_candidates) {
-            // ============================================================
-            // Random baseline: evolutionary candidates + random selection
-            // (no GP fitting, no local search, no Thompson sampling)
-            // ============================================================
-            auto t_phase0 = std::chrono::high_resolution_clock::now();
-
-            // Temporarily disable GP-directed local search
-            double saved_lsf = local_search_fraction;
-            local_search_fraction = 0.0;
-
-            GPRegressor dummy_gp;
-            int n_local;
-            double avg_steps;
-            generate_candidates(X, y.data(), static_cast<int>(X.size()),
-                                candidates_per_iter,
-                                ssk_cache, dummy_gp, 1.0, nullptr,
-                                seen, candidates, n_local, avg_steps,
-                                win_lo, win_hi);
-
-            local_search_fraction = saved_lsf;
-
-            auto t_phase1 = std::chrono::high_resolution_clock::now();
-            t_cand = std::chrono::duration<double>(t_phase1 - t_phase0).count();
-
-            if (candidates.empty()) break;
-
-            int n_cand = static_cast<int>(candidates.size());
-
-            // Random selection: uniformly pick n_thompson_samples candidates
-            std::vector<int> perm(n_cand);
-            std::iota(perm.begin(), perm.end(), 0);
-            std::shuffle(perm.begin(), perm.end(), gen);
-            int n_pick = std::min(n_thompson_samples, n_cand);
-            for (int i = 0; i < n_pick; ++i)
-                selected_indices.push_back(perm[i]);
-
-        } else {
             // ============================================================
             // Surrogate-assisted search: GP + Thompson sampling
             // ============================================================
@@ -3039,8 +2739,8 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
             int reg_limit = std::min(static_cast<int>(filtered_x_indices.size()), 2 * gp_max_train);
             for (int i = 0; i < reg_limit; ++i) {
                 int xi = filtered_x_indices[i];
-                if (ssk_cache.circuit_to_idx.find(X[xi]) == ssk_cache.circuit_to_idx.end())
-                    ssk_cache.register_circuit(X[xi]);
+                if (wl_cache.circuit_to_idx.find(X[xi]) == wl_cache.circuit_to_idx.end())
+                    wl_cache.register_circuit(X[xi]);
             }
 
             // Cap GP training set at gp_max_train using hybrid selection:
@@ -3072,8 +2772,8 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
                 // Stage 2: pivoted Cholesky for kernel-diverse points
                 std::vector<int> cidx(n_pool);
                 for (int i = 0; i < n_pool; ++i)
-                    cidx[i] = ssk_cache.circuit_to_idx[X[filtered_x_indices[i]]];
-                int cap = ssk_cache.capacity_;
+                    cidx[i] = wl_cache.circuit_to_idx[X[filtered_x_indices[i]]];
+                int cap = wl_cache.capacity_;
 
                 // L(i,j) Cholesky factor, d[i] residual diagonal
                 std::vector<double> L_data(static_cast<size_t>(n_pool) * n_total, 0.0);
@@ -3099,7 +2799,7 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
                     for (int i = 0; i < n_pool; ++i) {
                         if (i == pj) continue;
                         if (j >= n_best && taken[i]) continue;
-                        double K_val = ssk_cache.K_norm[cidx[i] * cap + cidx[pj]];
+                        double K_val = wl_cache.K_norm[cidx[i] * cap + cidx[pj]];
                         double dot = 0;
                         for (int k = 0; k < j; ++k)
                             dot += L_data[i * n_total + k] * L_data[pj * n_total + k];
@@ -3116,7 +2816,7 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
             std::vector<double> train_y(n_x);
             for (int i = 0; i < n_x; ++i) {
                 int xi = filtered_x_indices[selected_fi[i]];
-                train_indices[i] = ssk_cache.circuit_to_idx[X[xi]];
+                train_indices[i] = wl_cache.circuit_to_idx[X[xi]];
                 train_y[i] = y[xi];
             }
 
@@ -3148,7 +2848,7 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
 
             // Optimize GP hyperparameters
             int n_restarts = std::max(1, 3 - n_x / 10);
-            gp.optimize_hyperparameters(ssk_cache, train_indices.data(), n_x,
+            gp.optimize_hyperparameters(wl_cache, train_indices.data(), n_x,
                                         log_y_norm.data(), n_restarts,
                                         scale_bounds, noise_bounds);
 
@@ -3221,10 +2921,10 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
             }
 
             if (prefix_matches) {
-                gp.fit_incremental(ssk_cache, train_indices.data(), n_x,
+                gp.fit_incremental(wl_cache, train_indices.data(), n_x,
                                    old_n_train, log_y_norm.data());
             } else {
-                gp.fit(ssk_cache, train_indices.data(), n_x, log_y_norm.data());
+                gp.fit(wl_cache, train_indices.data(), n_x, log_y_norm.data());
             }
             prev_log_scale = gp.log_scale;
             prev_noise = gp.noise;
@@ -3234,7 +2934,7 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
             if (opt_scale / std::max(gp.noise, 1e-12) < 0.1 || opt_scale < 1e-6) {
                 gp.log_scale = 0.0;
                 gp.noise = 1e-2;
-                gp.fit(ssk_cache, train_indices.data(), n_x, log_y_norm.data());
+                gp.fit(wl_cache, train_indices.data(), n_x, log_y_norm.data());
                 prev_log_scale = gp.log_scale;
                 prev_noise = gp.noise;
             }
@@ -3247,53 +2947,6 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
             // --- Candidate generation + acquisition phase ---
             t_phase0 = std::chrono::high_resolution_clock::now();
 
-            if (use_boss_ga) {
-                // ============================================================
-                // BOSS acquisition-guided GA
-                // ============================================================
-
-                // Build seed data from GP training pool
-                std::vector<GrayCode> seed_circuits;
-                std::vector<double> seed_scores;
-                seed_circuits.reserve(n_x);
-                seed_scores.reserve(n_x);
-                for (int i = 0; i < n_x; ++i) {
-                    int xi = filtered_x_indices[selected_fi[i]];
-                    seed_circuits.push_back(X[xi].copy());
-                    seed_scores.push_back(y[xi]);
-                }
-
-                // y_best in normalized space for EI
-                double y_best_norm = *std::min_element(log_y_norm.begin(), log_y_norm.end());
-
-                std::vector<int> train_vec(train_indices.begin(), train_indices.begin() + n_x);
-
-                boss_acquisition_ga(
-                    seed_circuits, seed_scores.data(), n_x,
-                    boss_pop_size, boss_generations,
-                    ssk_cache, gp, scale,
-                    train_vec, n_x,
-                    y_best_norm,
-                    seen,
-                    candidates,
-                    win_lo, win_hi);
-
-                // candidates are already diversity-filtered by boss_acquisition_ga
-                // selected_indices = all candidates
-                int n_boss = static_cast<int>(candidates.size());
-                selected_indices.resize(n_boss);
-                std::iota(selected_indices.begin(), selected_indices.end(), 0);
-
-                // Save GP predicted mu for rank correlation (not available from BOSS GA directly)
-                // We skip Spearman computation for BOSS mode
-
-                t_phase1 = std::chrono::high_resolution_clock::now();
-                t_cand = std::chrono::duration<double>(t_phase1 - t_phase0).count();
-                t_acq = 0;  // acquisition is integrated into GA
-
-                if (candidates.empty()) break;
-
-            } else {
                 // ============================================================
                 // Original: generate candidates + LCB selection
                 // ============================================================
@@ -3305,7 +2958,7 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
             double force_random = (iters_since_improvement > effective_patience / 2) ? 0.5 : 0.0;
             generate_candidates(X, y.data(), static_cast<int>(X.size()),
                                 candidates_per_iter,
-                                ssk_cache, gp, scale, log_y_norm.data(),
+                                wl_cache, gp, scale, log_y_norm.data(),
                                 seen, candidates, n_local, avg_steps,
                                 win_lo, win_hi, force_random);
 
@@ -3325,7 +2978,7 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
             std::vector<int> train_indices_vec(train_indices.begin(),
                                                train_indices.begin() + n_x);
             std::vector<double> Ks(n_t * n_cand);
-            ssk_cache.compute_cross_kernel_subset(candidates, scale,
+            wl_cache.compute_cross_kernel_subset(candidates, scale,
                                                   train_indices_vec, Ks.data());
 
             // mu = Ks^T @ alpha
@@ -3409,7 +3062,7 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
                     bool too_similar = false;
                     if (!selected_circuits.empty() && effective_diversity_thresh < 1.0) {
                         for (int prev_idx = 0; prev_idx < static_cast<int>(selected_circuits.size()); ++prev_idx) {
-                            double k_val = ssk_cache.kernel_between(candidates[sidx], selected_circuits[prev_idx]);
+                            double k_val = wl_cache.kernel_between(candidates[sidx], selected_circuits[prev_idx]);
                             if (k_val > effective_diversity_thresh) {
                                 too_similar = true;
                                 break;
@@ -3474,11 +3127,9 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
             t_phase1 = std::chrono::high_resolution_clock::now();
             t_acq = std::chrono::duration<double>(t_phase1 - t_phase0).count();
 
-            } // end else (original candidate gen)
-            } // end if use_boss_ga / original
 
         // --- Decompose phase (shared, parallelized) ---
-        auto t_phase0 = std::chrono::high_resolution_clock::now();
+        t_phase0 = std::chrono::high_resolution_clock::now();
 
         int n_sel = static_cast<int>(selected_indices.size());
         bool improved_this_iter = false;
@@ -3511,7 +3162,7 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
             y.push_back(new_score);
             all_params.push_back(new_params);
             X.push_back(candidates[sel_idx].copy());
-            ssk_cache.register_circuit(candidates[sel_idx]);
+            wl_cache.register_circuit(candidates[sel_idx]);
 
             // Update window-local best
             int cand_size = static_cast<int>(candidates[sel_idx].size());
@@ -3537,14 +3188,81 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
             }
         }
 
-        auto t_phase1 = std::chrono::high_resolution_clock::now();
+        t_phase1 = std::chrono::high_resolution_clock::now();
         t_dec = std::chrono::duration<double>(t_phase1 - t_phase0).count();
+
+        // P3: Multi-restart BFGS for near-threshold candidates.
+        // When a candidate scores in [1e-6, 1e-2], the structure may be right but BFGS
+        // is stuck in a parametric local minimum. Re-run with additional random seeds.
+        // Only active when the main loop has been stagnating (iters_since_improvement >= 2)
+        // to avoid wasting decompose budget during productive phases.
+        if (iters_since_improvement >= 2 && !found_solution) {
+            std::vector<int> retry_indices;
+            for (int si = 0; si < n_sel; ++si) {
+                double s = dec_results[si].score;
+                if (s >= 1e-6 && s < 1e-2)
+                    retry_indices.push_back(si);
+            }
+            if (!retry_indices.empty()) {
+                const int n_restarts = 3;
+                std::ofstream flog(log_file, std::ios::app);
+                flog << "  P3 multi-restart BFGS: retrying " << retry_indices.size()
+                     << " near-threshold candidates with " << n_restarts << " random seeds" << std::endl;
+
+                for (int ri : retry_indices) {
+                    int sel_idx = selected_indices[ri];
+                    const GrayCode& circ = candidates[sel_idx];
+                    double orig_score = dec_results[ri].score;
+
+                    for (int rs = 0; rs < n_restarts; ++rs) {
+                        auto retry_res = decompose(circ);  // random init
+                        decompose_time += 0;  // already counted in elapsed within decompose
+                        decompose_count++;
+
+                        if (retry_res.first < orig_score) {
+                            // Update the stored entry
+                            y.back() = retry_res.first;  // update last pushed score (approx)
+                            // More precisely: find this circuit in X and update
+                            for (int xi = static_cast<int>(X.size()) - 1; xi >= 0; --xi) {
+                                if (X[xi] == circ) {
+                                    y[xi] = retry_res.first;
+                                    all_params[xi] = retry_res.second;
+                                    break;
+                                }
+                            }
+                            orig_score = retry_res.first;
+
+                            if (retry_res.first < best_score ||
+                                (retry_res.first < tolerance && best_score < tolerance &&
+                                 static_cast<int>(circ.size()) < static_cast<int>(best_circuit.size()))) {
+                                best_score = retry_res.first;
+                                best_circuit = circ.copy();
+                                best_params = retry_res.second;
+                                improved_this_iter = true;
+                            }
+                            if (retry_res.first < tolerance) {
+                                found_solution = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (found_solution) break;
+                }
+
+                if (found_solution) {
+                    std::ofstream flog2(log_file, std::ios::app);
+                    flog2 << "  P3 SOLUTION via multi-restart BFGS at D=" << best_circuit.size()
+                          << ", score=" << best_score << std::endl;
+                    kappa = saved_kappa;
+                    return WINDOW_SUCCESS;
+                }
+            }
+        }
 
         if (found_solution) {
             std::ofstream flog(log_file, std::ios::app);
             flog << "  Iter " << itr << ": SOLUTION at D=" << best_circuit.size()
                  << ", score=" << best_score
-                 << (use_random_candidates ? " [RANDOM]" : "")
                  << " [cand=" << std::fixed << std::setprecision(2) << t_cand
                  << "s dec=" << t_dec << "s]"
                  << std::defaultfloat << std::endl;
@@ -3565,7 +3283,7 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
 
         // Compute Spearman rank correlation between GP predicted mu and actual scores
         double spearman_rho = 0.0;
-        if (!use_random_candidates && n_sel >= 5 && static_cast<int>(gp_mu_selected.size()) == n_sel) {
+        if (n_sel >= 5 && static_cast<int>(gp_mu_selected.size()) == n_sel) {
             // Collect actual scores for this batch
             std::vector<double> actual_scores(n_sel);
             for (int si = 0; si < n_sel; ++si)
@@ -3606,7 +3324,7 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
         // Production runs that found solutions always had best_score < 0.01
         // before convergence; a gap > 0.01 with rho < 0.1 is a dead end.
         {
-            if (!use_random_candidates && window_best_score > 0.01 && spearman_rho < 0.1) {
+            if (window_best_score > 0.01 && spearman_rho < 0.1) {
                 score_gap_streak++;
                 if (score_gap_streak >= 3) {
                     std::ofstream flog(log_file, std::ios::app);
@@ -3627,7 +3345,6 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
                  << ": best=" << window_best_score
                  << " (D=" << window_best_D << ")"
                  << " evals=" << X.size()
-                 << (use_random_candidates ? " [RANDOM]" : "")
                  << " kappa=" << std::setprecision(3) << kappa
                  << " rho=" << std::setprecision(3) << spearman_rho
                  << " n_train=" << gp.n_train
@@ -3663,7 +3380,7 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
         else
             effective_diversity_thresh = diversity_thresh;
 
-        // Best-so-far plateau stagnation check
+        // P6: Adaptive plateau stagnation check based on GP signal quality
         int n_iters_done = static_cast<int>(iter_bests.size());
         if (n_iters_done >= stagnation_window) {
             double old_best = iter_bests[n_iters_done - stagnation_window];
@@ -3672,15 +3389,44 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
             double rel_improvement = (old_best > 1e-15)
                 ? (old_best - cur_best) / old_best
                 : 0.0;
+
             if (rel_improvement < stagnation_improvement_frac) {
-                std::ofstream flog(log_file, std::ios::app);
-                flog << "  Best-so-far plateau after " << itr + 1 << " iters"
-                     << " (best " << stagnation_window << " iters ago: " << old_best
-                     << ", now: " << cur_best << ", required "
-                     << std::fixed << std::setprecision(1) << (stagnation_improvement_frac * 100)
-                     << "% improvement)" << std::defaultfloat << std::endl;
-                kappa = saved_kappa;
-                return WINDOW_STAGNATION;
+                // P6: GP-informed early stop — if GP has been noise for 2+ iters
+                // and no improvement, stop immediately
+                if (spearman_rho < 0.1 && low_rho_streak >= 2) {
+                    std::ofstream flog(log_file, std::ios::app);
+                    flog << "  Early plateau exit: rho<0.1 for " << low_rho_streak
+                         << " iters, no improvement" << std::endl;
+                    kappa = saved_kappa;
+                    return WINDOW_STAGNATION;
+                }
+
+                // P6: GP-informed patience extension — if GP is informative (rho>=0.3),
+                // give it more time by extending the effective stagnation window
+                int adaptive_stagnation_window = stagnation_window;
+                if (spearman_rho >= 0.3) {
+                    adaptive_stagnation_window = std::min(stagnation_window + (n_iters_done - stagnation_window) + 1, 10);
+                }
+
+                // Only declare plateau if we've exhausted the adaptive window
+                if (n_iters_done >= adaptive_stagnation_window) {
+                    // Re-check with the adaptive window
+                    double adapt_old_best = iter_bests[n_iters_done - adaptive_stagnation_window];
+                    double adapt_rel_improvement = (adapt_old_best > 1e-15)
+                        ? (adapt_old_best - cur_best) / adapt_old_best
+                        : 0.0;
+                    if (adapt_rel_improvement < stagnation_improvement_frac) {
+                        std::ofstream flog(log_file, std::ios::app);
+                        flog << "  Best-so-far plateau after " << itr + 1 << " iters"
+                             << " (best " << adaptive_stagnation_window << " iters ago: " << adapt_old_best
+                             << ", now: " << cur_best << ", required "
+                             << std::fixed << std::setprecision(1) << (stagnation_improvement_frac * 100)
+                             << "% improvement, rho=" << std::setprecision(3) << spearman_rho
+                             << ")" << std::defaultfloat << std::endl;
+                        kappa = saved_kappa;
+                        return WINDOW_STAGNATION;
+                    }
+                }
             }
         }
 
@@ -3711,7 +3457,7 @@ void N_Qubit_Decomposition_Surrogate::start_decomposition() {
     if (gates.size() > 0) {
         // Compression mode: imported gate structure detected
         std::stringstream sstream;
-        sstream << "Starting " << (use_random_candidates ? "RANDOM baseline" : "surrogate")
+        sstream << "Starting surrogate"
                 << " COMPRESSION for " << qbit_num << "-qubit matrix" << std::endl;
         print(sstream, 1);
 
@@ -3764,7 +3510,7 @@ void N_Qubit_Decomposition_Surrogate::start_decomposition() {
     } else {
         // Bottom-up search mode
         std::stringstream sstream;
-        sstream << "Starting " << (use_random_candidates ? "RANDOM baseline" : "surrogate")
+        sstream << "Starting surrogate"
                 << " search for " << qbit_num << "-qubit matrix" << std::endl;
         print(sstream, 1);
 
@@ -3786,10 +3532,12 @@ void N_Qubit_Decomposition_Surrogate::start_decomposition() {
 
         // best_params may have been set from the imported gate structure (compression mode),
         // which has a different U3-gate count than construct_gate_structure.
-        // Re-decompose to get compatible params in that case.
+        // Re-decompose to get compatible params — use existing best_params as warm-start
+        // (decompose_with_initial_params clips/pads on mismatch) instead of random init,
+        // which can lose a good solution when the initial circuit already scored well.
         if (static_cast<int>(best_params.size()) != expected_param_num) {
             delete gate_structure;
-            std::pair<double, Matrix_real> result = decompose(best_circuit);
+            std::pair<double, Matrix_real> result = decompose_with_initial_params(best_circuit, best_params);
             best_score = result.first;
             best_params = result.second;
             decomposition_error = best_score;
