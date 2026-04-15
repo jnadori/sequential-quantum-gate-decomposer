@@ -299,6 +299,9 @@ N_Qubit_Decomposition_Surrogate::N_Qubit_Decomposition_Surrogate(
     get_int("d_seed_budget",d_seed_budget);
     get_int("stagnation_window",stagnation_window);
     get_dbl("stagnation_improvement_frac",stagnation_improvement_frac);
+    // P3: clamp stagnation_window so the plateau detector can fire before patience cap
+    if (stagnation_window >= window_patience)
+        stagnation_window = std::max(3, window_patience / 3);
     get_dbl("ssk_gap_decay",sur_gap_decay);
     get_dbl("ssk_match_decay",sur_match_decay);
     get_int("ssk_order",sur_ssk_order);
@@ -2116,6 +2119,59 @@ void N_Qubit_Decomposition_Surrogate::parallel_decompose_batch(
 }
 
 
+Matrix_real N_Qubit_Decomposition_Surrogate::excise_gate_params(
+    const Matrix_real& parent_params, int D_plus1, int pos) {
+
+    // Parent: D_plus1 * 6 gate params + 3 * qbit_num finalizing params
+    // Child (D = D_plus1 - 1): (D_plus1 - 1) * 6 gate params + 3 * qbit_num finalizing params
+    // Remove the 6 params at [pos*6, pos*6+5] from the gate params portion
+    int gate_params = (D_plus1 - 1) * 6;
+    int final_params = 3 * qbit_num;
+    int child_param_num = gate_params + final_params;
+    int parent_gate_params = D_plus1 * 6;
+
+    Matrix_real child_params(1, child_param_num);
+
+    // Copy gate params before the removed position
+    int dst = 0;
+    for (int i = 0; i < pos * 6; ++i)
+        child_params[dst++] = parent_params[i];
+    // Copy gate params after the removed position
+    for (int i = (pos + 1) * 6; i < parent_gate_params; ++i)
+        child_params[dst++] = parent_params[i];
+    // Copy finalizing layer params
+    for (int i = 0; i < final_params; ++i)
+        child_params[dst++] = parent_params[parent_gate_params + i];
+
+    return child_params;
+}
+
+
+void N_Qubit_Decomposition_Surrogate::parallel_decompose_batch_with_init(
+    const std::vector<GrayCode>& circuits,
+    const std::vector<Matrix_real>& init_params,
+    std::vector<DecompResult>& results) {
+
+    int n = static_cast<int>(circuits.size());
+    results.resize(n);
+    if (n == 0) return;
+
+    tbb::parallel_for(
+        tbb::blocked_range<int>(0, n, 1),
+        [&](tbb::blocked_range<int> r) {
+            for (int i = r.begin(); i < r.end(); ++i) {
+                auto t0 = std::chrono::high_resolution_clock::now();
+                auto res = decompose_with_initial_params(circuits[i], init_params[i]);
+                auto t1 = std::chrono::high_resolution_clock::now();
+                results[i].score = res.first;
+                results[i].params = res.second;
+                results[i].elapsed = std::chrono::duration<double>(t1 - t0).count();
+            }
+        }
+    );
+}
+
+
 // ============================================================================
 // Standalone SSK Gram matrix
 // ============================================================================
@@ -2446,12 +2502,14 @@ void N_Qubit_Decomposition_Surrogate::compress_over_D_range(
                 int D_plus1 = static_cast<int>(best_dplus1.size());
 
                 std::vector<GrayCode> removal_candidates;
+                std::vector<int> removal_positions;  // track which gate position was removed
                 for (int pos = 0; pos < D_plus1; ++pos) {
                     GrayCode shortened = best_dplus1.remove_Digit(pos);
                     GrayCode result = canonicalize_and_validate(shortened);
                     if (result.size() > 0 && seen.find(result) == seen.end()) {
                         seen.insert(result.copy());
                         removal_candidates.push_back(std::move(result));
+                        removal_positions.push_back(pos);
                     }
                 }
 
@@ -2463,8 +2521,16 @@ void N_Qubit_Decomposition_Surrogate::compress_over_D_range(
                 }
 
                 if (!removal_candidates.empty()) {
+                    // Build warm-start params by excising the 6 params of the removed gate
+                    std::vector<Matrix_real> warmstart_params;
+                    warmstart_params.reserve(removal_candidates.size());
+                    for (int ri = 0; ri < static_cast<int>(removal_candidates.size()); ++ri) {
+                        warmstart_params.push_back(
+                            excise_gate_params(all_params[best_dplus1_idx], D_plus1, removal_positions[ri]));
+                    }
+
                     std::vector<DecompResult> dec_results;
-                    parallel_decompose_batch(removal_candidates, dec_results);
+                    parallel_decompose_batch_with_init(removal_candidates, warmstart_params, dec_results);
 
                     for (int si = 0; si < static_cast<int>(removal_candidates.size()); ++si) {
                         X.push_back(removal_candidates[si].copy());
@@ -2508,9 +2574,10 @@ void N_Qubit_Decomposition_Surrogate::compress_over_D_range(
                 prev_indices.push_back(static_cast<int>(i));
 
         std::vector<GrayCode> seed_circuits;
+        std::vector<Matrix_real> seed_init_params;  // P5: warm-start params (empty = random)
         std::mt19937 gen(42 + D);
 
-        // Shrink-seed from D+1 solutions
+        // Shrink-seed from D+1 solutions with parameter transfer (P5)
         if (!prev_indices.empty()) {
             std::sort(prev_indices.begin(), prev_indices.end(),
                       [&y](int a, int b) { return y[a] < y[b]; });
@@ -2518,11 +2585,17 @@ void N_Qubit_Decomposition_Surrogate::compress_over_D_range(
             int needed = X0_size;
             for (int pi : prev_indices) {
                 if (n_shrunk >= needed) break;
+                int D_plus1 = static_cast<int>(X[pi].size());
+                std::uniform_int_distribution<int> pos_dist(0, D_plus1 - 1);
                 for (int attempt = 0; attempt < 10 && n_shrunk < needed; ++attempt) {
-                    GrayCode shrunk = mutate_shrink(X[pi], D);
+                    int pos = pos_dist(gen);
+                    GrayCode shrunk_raw = X[pi].remove_Digit(pos);
+                    GrayCode shrunk = canonicalize_and_validate(shrunk_raw);
                     if (shrunk.size() > 0 && seen.find(shrunk) == seen.end()) {
                         seen.insert(shrunk.copy());
                         seed_circuits.push_back(shrunk.copy());
+                        seed_init_params.push_back(
+                            excise_gate_params(all_params[pi], D_plus1, pos));
                         n_shrunk++;
                     }
                 }
@@ -2537,14 +2610,15 @@ void N_Qubit_Decomposition_Surrogate::compress_over_D_range(
             if (rand_circ.size() > 0 && seen.find(rand_circ) == seen.end()) {
                 seen.insert(rand_circ.copy());
                 seed_circuits.push_back(rand_circ.copy());
+                seed_init_params.push_back(Matrix_real(1, 0));  // empty = random init
                 n_random++;
             }
         }
 
-        // Parallel decompose all seeds
+        // Parallel decompose all seeds with warm-start where available
         if (!seed_circuits.empty()) {
             std::vector<DecompResult> dec_results;
-            parallel_decompose_batch(seed_circuits, dec_results);
+            parallel_decompose_batch_with_init(seed_circuits, seed_init_params, dec_results);
 
             for (int si = 0; si < static_cast<int>(seed_circuits.size()); ++si) {
                 X.push_back(seed_circuits[si].copy());
@@ -2836,6 +2910,8 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
     // Fix 4: adaptive diversity threshold
     int consecutive_low_sel = 0;
     double effective_diversity_thresh = diversity_thresh;
+    // P3: score-gap early exit streak counter
+    int score_gap_streak = 0;
 
     // Best-so-far plateau stagnation tracking
     std::vector<double> iter_bests;  // window-best score at end of each iteration
@@ -2970,15 +3046,20 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
             // Cap GP training set at gp_max_train using hybrid selection:
             // 50% best-by-score + 50% pivoted Cholesky (diversity)
             // Only use the registered subset for pivoted Cholesky
+            // P6: reduce GP training set when D is large or GP is unreliable
+            int effective_gp_max_train = gp_max_train;
+            if (win_hi > 25 || (low_rho_streak >= 2 && prev_rho < 0.1))
+                effective_gp_max_train = std::min(effective_gp_max_train, 500);
+
             int n_pool = reg_limit;  // work within registered circuits
 
             std::vector<int> selected_fi;  // selected indices into filtered_x_indices
-            if (n_pool <= gp_max_train) {
+            if (n_pool <= effective_gp_max_train) {
                 selected_fi.resize(n_pool);
                 for (int i = 0; i < n_pool; ++i) selected_fi[i] = i;
             } else {
-                int n_best = static_cast<int>(gp_max_train * gp_score_ratio);
-                int n_total = gp_max_train;
+                int n_best = static_cast<int>(effective_gp_max_train * gp_score_ratio);
+                int n_total = effective_gp_max_train;
                 selected_fi.reserve(n_total);
                 std::vector<bool> taken(n_pool, false);
 
@@ -3303,10 +3384,17 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
 
             // 5. Greedy LCB selection with on-demand SSK diversity
             //    Only computes O(n_pick^2) SSK evaluations instead of O(n_cand^2)
-            // Fix 2: reduce decompose budget when GP is unreliable
-            int effective_n_pick = n_thompson_samples;
-            if (prev_rho < 0.15 && low_rho_streak >= 2 && iters_since_improvement > 5)
-                effective_n_pick = std::max(10, n_thompson_samples / 4);
+            // P4: Adaptive BFGS budget — scale inversely with D and backoff on stagnation
+            int depth_adaptive_budget = std::max(50, static_cast<int>(n_thompson_samples * 20.0 / std::max(win_hi, 1)));
+            int effective_n_pick = depth_adaptive_budget;
+            // Exponential backoff: halve budget each no-improvement iter, floor 20
+            if (iters_since_improvement > 0) {
+                int backoff_shift = std::min(iters_since_improvement, 10);
+                effective_n_pick = std::max(20, effective_n_pick >> backoff_shift);
+            }
+            // Also reduce when GP is unreliable
+            if (prev_rho < 0.15 && low_rho_streak >= 2)
+                effective_n_pick = std::min(effective_n_pick, std::max(10, depth_adaptive_budget / 4));
             int n_pick = std::min(effective_n_pick, n_cand);
             std::set<int> selected_set;
             std::vector<GrayCode> selected_circuits;
@@ -3512,6 +3600,25 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
         if (spearman_rho < 0.15) low_rho_streak++;
         else low_rho_streak = 0;
         prev_rho = spearman_rho;
+
+        // P3: Score-gap early exit — if best score is far from tolerance and GP
+        // has no predictive power for several iterations, stop immediately.
+        // Production runs that found solutions always had best_score < 0.01
+        // before convergence; a gap > 0.01 with rho < 0.1 is a dead end.
+        {
+            if (!use_random_candidates && window_best_score > 0.01 && spearman_rho < 0.1) {
+                score_gap_streak++;
+                if (score_gap_streak >= 3) {
+                    std::ofstream flog(log_file, std::ios::app);
+                    flog << "  Score-gap early exit: best=" << window_best_score
+                         << " > 0.01 with rho<0.1 for 3 iters" << std::endl;
+                    kappa = saved_kappa;
+                    return WINDOW_STAGNATION;
+                }
+            } else {
+                score_gap_streak = 0;
+            }
+        }
 
         // Log — show window-local best score
         {

@@ -281,6 +281,17 @@ public:
     /// Parallel decompose a batch of circuits using TBB (respects 'parallel' config)
     void parallel_decompose_batch(const std::vector<GrayCode>& circuits, std::vector<DecompResult>& results);
 
+    /// Parallel decompose with warm-start initial params (one per circuit)
+    void parallel_decompose_batch_with_init(
+        const std::vector<GrayCode>& circuits,
+        const std::vector<Matrix_real>& init_params,
+        std::vector<DecompResult>& results);
+
+    /// Compute warm-start params for a D-length circuit obtained by removing gate at
+    /// position 'pos' from a D+1 circuit with optimized params 'parent_params'.
+    /// Each gate contributes 6 params; finalizing layer contributes 3*qbit_num params.
+    Matrix_real excise_gate_params(const Matrix_real& parent_params, int D_plus1, int pos);
+
     // ---- Gate structure building (following Tree_Search pattern) ----
 
     virtual Gates_block* construct_gate_structure(const GrayCode& gcode, bool finalize = true);
