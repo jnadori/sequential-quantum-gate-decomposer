@@ -226,12 +226,11 @@ N_Qubit_Decomposition_Surrogate::N_Qubit_Decomposition_Surrogate(
     local_search_max_neighbors = 50;
     local_search_patience = 3;
     local_search_min_improvement = 1e-4;
-    n_thompson_samples = 10;
+    eval_budget_base = 10;
     d_penalty = 0.0;
     enum_threshold = 10000;
     gp_max_train = 300;
     gp_score_ratio = 0.5;
-    diversity_thresh = 0.95;
     d_seed_budget = 50;
     window_patience = 50;
     window_max_iters = 100;
@@ -274,14 +273,14 @@ N_Qubit_Decomposition_Surrogate::N_Qubit_Decomposition_Surrogate(
     get_int("local_search_max_neighbors",local_search_max_neighbors);
     get_int("local_search_patience",local_search_patience);
     get_dbl("local_search_min_improvement",local_search_min_improvement);
-    get_int("n_thompson_samples",n_thompson_samples);
+    get_int("eval_budget_base",eval_budget_base);
+    get_int("n_thompson_samples",eval_budget_base);  // legacy alias
     get_dbl("d_penalty",d_penalty);
     get_int("enum_threshold",enum_threshold);
     get_int("window_patience",window_patience);
     get_int("window_max_iters",window_max_iters);
     get_int("gp_max_train",gp_max_train);
     get_dbl("gp_score_ratio",gp_score_ratio);
-    get_dbl("topk_diversity_threshold",diversity_thresh);
     get_int("d_seed_budget",d_seed_budget);
     get_int("stagnation_window",stagnation_window);
     get_dbl("stagnation_improvement_frac",stagnation_improvement_frac);
@@ -2315,7 +2314,7 @@ void N_Qubit_Decomposition_Surrogate::compress_over_D_range(
 
         std::vector<GrayCode> seed_circuits;
         std::vector<Matrix_real> seed_init_params;  // P5: warm-start params (empty = random)
-        std::mt19937 gen(42 + D);
+        std::mt19937 shrink_gen(42 + D);
 
         // Shrink-seed from D+1 solutions with parameter transfer (P5)
         if (!prev_indices.empty()) {
@@ -2328,7 +2327,7 @@ void N_Qubit_Decomposition_Surrogate::compress_over_D_range(
                 int D_plus1 = static_cast<int>(X[pi].size());
                 std::uniform_int_distribution<int> pos_dist(0, D_plus1 - 1);
                 for (int attempt = 0; attempt < 10 && n_shrunk < needed; ++attempt) {
-                    int pos = pos_dist(gen);
+                    int pos = pos_dist(shrink_gen);
                     GrayCode shrunk_raw = X[pi].remove_Digit(pos);
                     GrayCode shrunk = canonicalize_and_validate(shrunk_raw);
                     if (shrunk.size() > 0 && seen.find(shrunk) == seen.end()) {
@@ -2342,6 +2341,16 @@ void N_Qubit_Decomposition_Surrogate::compress_over_D_range(
             }
         }
 
+        // Find best D-length params so far for warm-starting random seeds
+        Matrix_real best_D_params;
+        double best_D_score = std::numeric_limits<double>::infinity();
+        for (size_t i = 0; i < X.size(); ++i) {
+            if (static_cast<int>(X[i].size()) == D && y[i] < best_D_score) {
+                best_D_score = y[i];
+                best_D_params = all_params[i];
+            }
+        }
+
         // Random seeding: generate purely random circuits at this D
         // to cover structures not adjacent to D+1 solutions
         int random_budget = 3 * X0_size;
@@ -2350,7 +2359,7 @@ void N_Qubit_Decomposition_Surrogate::compress_over_D_range(
             if (rand_circ.size() > 0 && seen.find(rand_circ) == seen.end()) {
                 seen.insert(rand_circ.copy());
                 seed_circuits.push_back(rand_circ.copy());
-                seed_init_params.push_back(Matrix_real(1, 0));  // empty = random init
+                seed_init_params.push_back(best_D_params.size() > 0 ? best_D_params.copy() : Matrix_real(1, 0));
                 n_random++;
             }
         }
@@ -2438,8 +2447,19 @@ void N_Qubit_Decomposition_Surrogate::compress_over_D_range(
         }
 
         if (!retry_circuits.empty()) {
+            // Refresh best D-length params with any newer results
+            for (size_t i = 0; i < X.size(); ++i) {
+                if (static_cast<int>(X[i].size()) == D && y[i] < best_D_score) {
+                    best_D_score = y[i];
+                    best_D_params = all_params[i];
+                }
+            }
+            std::vector<Matrix_real> retry_init(retry_circuits.size());
+            for (size_t i = 0; i < retry_circuits.size(); ++i)
+                retry_init[i] = best_D_params.size() > 0 ? best_D_params.copy() : Matrix_real(1, 0);
+
             std::vector<DecompResult> dec_results;
-            parallel_decompose_batch(retry_circuits, dec_results);
+            parallel_decompose_batch_with_init(retry_circuits, retry_init, dec_results);
 
             bool retry_found = false;
             for (int si = 0; si < static_cast<int>(retry_circuits.size()); ++si) {
@@ -2645,9 +2665,6 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
     // Fix 2: reduce decompose budget when GP is unreliable
     double prev_rho = 0.0;
     int low_rho_streak = 0;
-    // Fix 4: adaptive diversity threshold
-    int consecutive_low_sel = 0;
-    double effective_diversity_thresh = diversity_thresh;
     // P3: score-gap early exit streak counter
     int score_gap_streak = 0;
 
@@ -3038,7 +3055,7 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
             // 5. Greedy LCB selection with on-demand SSK diversity
             //    Only computes O(n_pick^2) SSK evaluations instead of O(n_cand^2)
             // P4: Adaptive BFGS budget — scale inversely with D and backoff on stagnation
-            int depth_adaptive_budget = std::max(50, static_cast<int>(n_thompson_samples * 20.0 / std::max(win_hi, 1)));
+            int depth_adaptive_budget = std::max(50, static_cast<int>(eval_budget_base * 20.0 / std::max(win_hi, 1)));
             int effective_n_pick = depth_adaptive_budget;
             // Exponential backoff: halve budget each no-improvement iter, floor 20
             if (iters_since_improvement > 0) {
@@ -3050,79 +3067,18 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
                 effective_n_pick = std::min(effective_n_pick, std::max(10, depth_adaptive_budget / 4));
             int n_pick = std::min(effective_n_pick, n_cand);
             std::set<int> selected_set;
-            std::vector<GrayCode> selected_circuits;
 
-            for (int pick = 0; pick < n_pick; ++pick) {
-                bool found = false;
-                for (int sidx : lcb_order) {
-                    if (selected_set.count(sidx)) continue;
-                    if (seen.find(candidates[sidx]) != seen.end()) continue;
-
-                    // On-demand diversity check against already-selected candidates
-                    bool too_similar = false;
-                    if (!selected_circuits.empty() && effective_diversity_thresh < 1.0) {
-                        for (int prev_idx = 0; prev_idx < static_cast<int>(selected_circuits.size()); ++prev_idx) {
-                            double k_val = wl_cache.kernel_between(candidates[sidx], selected_circuits[prev_idx]);
-                            if (k_val > effective_diversity_thresh) {
-                                too_similar = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (!too_similar) {
-                        selected_indices.push_back(sidx);
-                        selected_set.insert(sidx);
-                        selected_circuits.push_back(candidates[sidx].copy());
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) break;
-            }
-
-            // If we didn't select enough candidates, fill remaining slots with random circuits
-            int n_selected = static_cast<int>(selected_indices.size());
-            if (n_selected < n_pick) {
-                int max_attempts = (n_pick - n_selected) * 20;
-                int attempts = 0;
-                while (n_selected < n_pick && attempts < max_attempts) {
-                    attempts++;
-                    // Pick a random D in [win_lo, win_hi]
-                    std::uniform_int_distribution<int> d_dist(win_lo, win_hi);
-                    int rand_D = d_dist(gen);
-                    GrayCode rand_circ = generate_valid_sequence(rand_D);
-                    if (rand_circ.size() == 0) continue;
-                    rand_circ = canonicalize_and_validate(rand_circ);
-                    if (rand_circ.size() == 0) continue;
-                    if (seen.find(rand_circ) != seen.end()) continue;
-                    // Check not already in selected_circuits (by canonical form)
-                    bool dup = false;
-                    for (auto& sc : selected_circuits) {
-                        if (sc == rand_circ) { dup = true; break; }
-                    }
-                    if (dup) continue;
-                    // Add as a new candidate
-                    int new_idx = static_cast<int>(candidates.size());
-                    candidates.push_back(rand_circ);
-                    selected_indices.push_back(new_idx);
-                    selected_circuits.push_back(rand_circ.copy());
-                    n_selected++;
-                }
-                if (n_selected < n_pick) {
-                    std::ofstream flog(log_file, std::ios::app);
-                    flog << "  [random fill] could not reach target (target=" << n_pick << " got=" << n_selected << ")" << std::endl;
-                }
+            for (int sidx : lcb_order) {
+                if (static_cast<int>(selected_set.size()) >= n_pick) break;
+                if (selected_set.count(sidx)) continue;
+                if (seen.find(candidates[sidx]) != seen.end()) continue;
+                selected_indices.push_back(sidx);
+                selected_set.insert(sidx);
             }
 
             // Save GP predicted mu for selected candidates (for rank correlation)
-            // New random-fill candidates don't have GP mu; use 0.0 as placeholder
-            for (int cidx : selected_indices) {
-                if (cidx < static_cast<int>(log_mu_norm.size()))
-                    gp_mu_selected.push_back(log_mu_norm[cidx]);
-                else
-                    gp_mu_selected.push_back(0.0);
-            }
+            for (int cidx : selected_indices)
+                gp_mu_selected.push_back(log_mu_norm[cidx]);
 
             t_phase1 = std::chrono::high_resolution_clock::now();
             t_acq = std::chrono::duration<double>(t_phase1 - t_phase0).count();
@@ -3369,16 +3325,6 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
         } else {
             zero_sel_streak = 0;
         }
-
-        // Fix 4: update adaptive diversity threshold based on n_sel trend
-        if (n_sel < n_thompson_samples / 2)
-            consecutive_low_sel++;
-        else
-            consecutive_low_sel = 0;
-        if (consecutive_low_sel > 5)
-            effective_diversity_thresh = std::min(1.0, diversity_thresh * 2.0);
-        else
-            effective_diversity_thresh = diversity_thresh;
 
         // P6: Adaptive plateau stagnation check based on GP signal quality
         int n_iters_done = static_cast<int>(iter_bests.size());

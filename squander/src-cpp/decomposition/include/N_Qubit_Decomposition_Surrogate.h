@@ -120,12 +120,11 @@ protected:
     int local_search_max_neighbors;  // max neighbors evaluated per local search step (0 = unlimited)
     int local_search_patience;       // stop local search after this many steps with marginal improvement
     double local_search_min_improvement; // relative improvement threshold for patience check
-    int n_thompson_samples;
+    int eval_budget_base;
     double d_penalty;
     int enum_threshold;
     int gp_max_train;  // max training points for GP (0 = unlimited)
     double gp_score_ratio;  // fraction of gp_max_train filled by best-by-score (rest: diversity)
-    double diversity_thresh;  // kernel similarity threshold for Thompson Sampling diversity (default 0.95)
     int d_seed_budget;  // max D-1 circuits seeded into GP at D transition (default 50)
 
     // Per-D search config
