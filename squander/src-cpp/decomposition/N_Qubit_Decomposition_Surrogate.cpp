@@ -2209,15 +2209,16 @@ void N_Qubit_Decomposition_Surrogate::compress_over_D_range(
                     double triviality;
                     int parent_idx;  // index into dplus1_indices
                 };
+                const int max_removals = 2 * (D - 1);  // hardcap: O(D), not O(K*D)
                 std::vector<RemovalEntry> removal_entries;
 
-                for (int pi = 0; pi < n_parents; ++pi) {
+                for (int pi = 0; pi < n_parents && static_cast<int>(removal_entries.size()) < max_removals; ++pi) {
                     int parent_x_idx = dplus1_indices[pi];
                     const GrayCode& parent_circ = X[parent_x_idx];
                     int D_plus1 = static_cast<int>(parent_circ.size());
                     const Matrix_real& parent_params = all_params[parent_x_idx];
 
-                    for (int pos = 0; pos < D_plus1; ++pos) {
+                    for (int pos = 0; pos < D_plus1 && static_cast<int>(removal_entries.size()) < max_removals; ++pos) {
                         GrayCode shortened = parent_circ.remove_Digit(pos);
                         GrayCode result = canonicalize_and_validate(shortened);
                         if (result.size() > 0 && seen.find(result) == seen.end()) {
