@@ -3054,17 +3054,17 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
 
             // 5. Greedy LCB selection with on-demand SSK diversity
             //    Only computes O(n_pick^2) SSK evaluations instead of O(n_cand^2)
-            // P4: Adaptive BFGS budget — scale inversely with D and backoff on stagnation
-            int depth_adaptive_budget = std::max(50, static_cast<int>(eval_budget_base * 20.0 / std::max(win_hi, 1)));
+            // P4: Adaptive BFGS budget — scale softly with depth and backoff on stagnation
+            int depth_adaptive_budget = std::max(60, static_cast<int>(eval_budget_base * 30.0 / std::sqrt(std::max(win_hi, 1))));
             int effective_n_pick = depth_adaptive_budget;
-            // Exponential backoff: halve budget each no-improvement iter, floor 20
+            // Exponential backoff: halve budget each no-improvement iter, floor 40
             if (iters_since_improvement > 0) {
-                int backoff_shift = std::min(iters_since_improvement, 10);
-                effective_n_pick = std::max(20, effective_n_pick >> backoff_shift);
+                int backoff_shift = std::min(iters_since_improvement, 5);
+                effective_n_pick = std::max(40, effective_n_pick >> backoff_shift);
             }
             // Also reduce when GP is unreliable
             if (prev_rho < 0.15 && low_rho_streak >= 2)
-                effective_n_pick = std::min(effective_n_pick, std::max(10, depth_adaptive_budget / 4));
+                effective_n_pick = std::min(effective_n_pick, std::max(20, depth_adaptive_budget / 3));
             int n_pick = std::min(effective_n_pick, n_cand);
             std::set<int> selected_set;
 
