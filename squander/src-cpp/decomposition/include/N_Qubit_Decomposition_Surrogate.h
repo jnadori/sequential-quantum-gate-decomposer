@@ -29,6 +29,10 @@ limitations under the License.
 #include "GrayCodeHash.h"
 #include "n_aryGrayCodeCounter.h"
 #include "GPRegressor.h"
+#include "CircuitCanonicalizer.h"
+#include "CircuitMutators.h"
+#include "SurrogateModel.h"
+#include "GateRemover.h"
 
 #include <algorithm>
 #include <cmath>
@@ -56,6 +60,18 @@ limitations under the License.
 class N_Qubit_Decomposition_Surrogate : public Optimization_Interface {
 
 protected:
+    /// Composed sub-system: canonicalization and validation
+    std::unique_ptr<CircuitCanonicalizer> canon_;
+
+    /// Composed sub-system: mutation operators and candidate generation
+    std::unique_ptr<CircuitMutators> mutators_;
+
+    /// Composed sub-system: GP surrogate model
+    std::unique_ptr<SurrogateModel> surrogate_;
+
+    /// Composed sub-system: gate removal (Phase 1 + Phase 1.5)
+    std::unique_ptr<GateRemover> gate_remover_;
+
     /// The maximal number of two-qubit gates (circuit depth)
     int level_limit;
 
@@ -258,13 +274,8 @@ public:
 
     // ---- Incremental canonical DAG for point mutations ----
 
-    /// Cached DAG structure for incremental canonical form updates
-    struct CanonicalDAG {
-        std::vector<std::vector<int>> adj;   // adjacency list (n elements)
-        std::vector<int> in_degree;          // in-degree per position
-        std::vector<int> masks;              // bitmask per position
-        int n;                               // sequence length
-    };
+    /// Cached DAG structure — delegated to CircuitCanonicalizer
+    using CanonicalDAG = CircuitCanonicalizer::CanonicalDAG;
 
     /// Build a CanonicalDAG from a sequence. O(D^2).
     CanonicalDAG build_canonical_dag(const GrayCode& seq);
@@ -295,7 +306,7 @@ public:
     bool check_new_position(const int* window_masks, int pos);
 
     /// Check OSR feasibility of a circuit
-    virtual bool check_osr_feasibility(const GrayCode& circuit);
+    bool check_osr_feasibility(const GrayCode& circuit);
 
     // ---- Enumeration ----
 
@@ -304,7 +315,7 @@ public:
 
     // ---- Evolutionary operators ----
 
-    GrayCode generate_valid_sequence(int D);
+    GrayCode generate_valid_sequence(int D);  // delegates to canon_, uses gen
     GrayCode mutate_point(const GrayCode& seq);
     GrayCode mutate_swap(const GrayCode& seq);
     GrayCode mutate_block(const GrayCode& seq, int blk_size);

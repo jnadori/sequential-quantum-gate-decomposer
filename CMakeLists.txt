@@ -795,6 +795,10 @@ list(APPEND qgd_files
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/decomposition/N_Qubit_Decomposition_Tabu_Search.cpp
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/decomposition/N_Qubit_Decomposition_Surrogate.cpp
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/decomposition/N_Qubit_Decomposition_Surrogate_GateLevel.cpp
+    ${PROJECT_SOURCE_DIR}/squander/src-cpp/decomposition/CircuitCanonicalizer.cpp
+    ${PROJECT_SOURCE_DIR}/squander/src-cpp/decomposition/CircuitMutators.cpp
+    ${PROJECT_SOURCE_DIR}/squander/src-cpp/decomposition/SurrogateModel.cpp
+    ${PROJECT_SOURCE_DIR}/squander/src-cpp/decomposition/GateRemover.cpp
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/variational_quantum_eigensolver/Variational_Quantum_Eigensolver_Base.cpp  
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/variational_quantum_eigensolver/Generative_Quantum_Machine_Learning_Base.cpp  
     ${PROJECT_SOURCE_DIR}/squander/src-cpp/random_unitary/Random_Unitary.cpp
