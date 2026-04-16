@@ -562,30 +562,44 @@ std::pair<double, Matrix_real> N_Qubit_Decomposition_Surrogate::decompose(
 std::pair<double, Matrix_real> N_Qubit_Decomposition_Surrogate::decompose_with_rng(
     const GrayCode& circuit, std::mt19937& local_gen) {
 
-    Gates_block* gate_structure = construct_gate_structure(circuit);
-    int param_num = gate_structure->get_parameter_num();
+    constexpr int n_retries = 5;
+    double best_score = std::numeric_limits<double>::max();
+    Matrix_real best_params;
 
-    N_Qubit_Decomposition_custom cDecomp(Umtx.copy(), qbit_num, false, config, RANDOM, accelerator_num);
-    cDecomp.set_custom_gate_structure(gate_structure);
-    delete gate_structure;  // set_custom_gate_structure clones the gates; free the original
-    cDecomp.set_verbose(0);
-    cDecomp.set_cost_function_variant(HILBERT_SCHMIDT_TEST);
-    cDecomp.set_optimization_tolerance(tolerance);
-    cDecomp.set_optimizer(alg);
-
-    // Random initial parameters
-    Matrix_real random_params(1, param_num);
     std::uniform_real_distribution<double> param_dist(0.0, 2.0 * M_PI);
-    for (int i = 0; i < param_num; ++i)
-        random_params[i] = param_dist(local_gen);
-    cDecomp.set_optimized_parameters(random_params.get_data(), param_num);
 
-    cDecomp.start_decomposition();
+    for (int retry = 0; retry < n_retries; ++retry) {
+        Gates_block* gate_structure = construct_gate_structure(circuit);
+        int param_num = gate_structure->get_parameter_num();
 
-    Matrix_real params = cDecomp.get_optimized_parameters();
-    double score = cDecomp.optimization_problem(params);
+        N_Qubit_Decomposition_custom cDecomp(Umtx.copy(), qbit_num, false, config, RANDOM, accelerator_num);
+        cDecomp.set_custom_gate_structure(gate_structure);
+        delete gate_structure;
+        cDecomp.set_verbose(0);
+        cDecomp.set_cost_function_variant(HILBERT_SCHMIDT_TEST);
+        cDecomp.set_optimization_tolerance(tolerance);
+        cDecomp.set_optimizer(alg);
 
-    return {score, params};
+        Matrix_real random_params(1, param_num);
+        for (int i = 0; i < param_num; ++i)
+            random_params[i] = param_dist(local_gen);
+        cDecomp.set_optimized_parameters(random_params.get_data(), param_num);
+
+        cDecomp.start_decomposition();
+
+        Matrix_real params = cDecomp.get_optimized_parameters();
+        double score = cDecomp.optimization_problem(params);
+
+        if (score < best_score) {
+            best_score = score;
+            best_params = std::move(params);
+        }
+
+        if (best_score < tolerance)
+            break;
+    }
+
+    return {best_score, std::move(best_params)};
 }
 
 std::pair<double, Matrix_real> N_Qubit_Decomposition_Surrogate::decompose_with_initial_params(
@@ -1486,7 +1500,7 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
                 retry_indices.push_back(si);
         }
         if (!retry_indices.empty()) {
-            const int n_restarts = 3;
+            const int n_restarts = 5;
             std::ofstream flog(log_file, std::ios::app);
             flog << "  P3 multi-restart BFGS: retrying " << retry_indices.size()
                  << " near-threshold candidates" << std::endl;
@@ -1559,6 +1573,11 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
              << " [time=" << std::fixed << std::setprecision(2) << total_time << "s]"
              << std::defaultfloat << std::endl;
     }
+
+    // If we already have a solution at or below this window, that's success
+    if (best_score < tolerance && static_cast<int>(best_circuit.size()) <= win_hi
+        && static_cast<int>(best_circuit.size()) >= win_lo)
+        return WINDOW_SUCCESS;
 
     return improved ? WINDOW_SUCCESS : WINDOW_STAGNATION;
 }
