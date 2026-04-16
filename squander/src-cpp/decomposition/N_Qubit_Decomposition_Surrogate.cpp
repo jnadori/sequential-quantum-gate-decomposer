@@ -3230,8 +3230,8 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
         // Record window-best at end of this iteration for plateau detection
         iter_bests.push_back(window_best_score);
 
-        // Patience fallback: reset on meaningful best improvement
-        if (improved_this_iter && (prev_best_score - best_score) > prev_best_score * 0.25) {
+        // Patience fallback: reset on any improvement
+        if (improved_this_iter) {
             iters_since_improvement = 0;
             prev_best_score = best_score;
         } else {
