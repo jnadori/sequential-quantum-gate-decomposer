@@ -1418,160 +1418,161 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
              << "total data=" << X.size() << std::endl;
     }
 
-    // --- Single-pass GP round ---
-    auto t_total_start = std::chrono::high_resolution_clock::now();
-
-    // Train GP
-    surrogate_->reset();
+    // --- 3-round GP loop ---
+    constexpr int n_gp_rounds = 3;
     int d_filter_lo = std::max(1, win_lo - 2);
     int d_filter_hi = win_hi + 2;
-    auto train_result = surrogate_->train_window(X, y, d_filter_lo, d_filter_hi);
-
-    if (train_result.n_train == 0) return WINDOW_BUDGET;
-
-    double scale = train_result.scale;
-
-    // Generate candidates
-    std::vector<GrayCode> candidates;
-    int n_local;
-    double avg_steps;
-    mutators_->generate_candidates(X, y.data(), static_cast<int>(X.size()),
-                                    candidates_per_iter,
-                                    surrogate_->cache(), surrogate_->gp(), scale,
-                                    train_result.log_y_norm.data(),
-                                    seen, candidates, n_local, avg_steps,
-                                    gen, win_lo, win_hi, 0.0);
-
-    if (candidates.empty()) return WINDOW_BUDGET;
-
-    // LCB acquisition
-    int depth_adaptive_budget = std::max(60, static_cast<int>(eval_budget_base * 30.0 / std::sqrt(std::max(win_hi, 1))));
-    auto acq_result = surrogate_->select_candidates_lcb(
-        candidates, seen, kappa, d_penalty, win_hi, depth_adaptive_budget);
-
-    int n_sel = static_cast<int>(acq_result.selected_indices.size());
-    if (n_sel == 0) return WINDOW_BUDGET;
-
-    // Decompose selected candidates
-    std::vector<GrayCode> sel_circuits(n_sel);
-    for (int si = 0; si < n_sel; ++si)
-        sel_circuits[si] = candidates[acq_result.selected_indices[si]].copy();
-
-    std::vector<DecompResult> dec_results;
-    parallel_decompose_batch(sel_circuits, dec_results);
-
-    // Update search state
     bool improved = false;
     bool found_solution = false;
-    for (int si = 0; si < n_sel; ++si) {
-        int sel_idx = acq_result.selected_indices[si];
-        double new_score = dec_results[si].score;
 
-        y.push_back(new_score);
-        all_params.push_back(dec_results[si].params);
-        X.push_back(candidates[sel_idx].copy());
-        wl_cache.register_circuit(candidates[sel_idx]);
-        decompose_time += dec_results[si].elapsed;
-        decompose_count++;
+    for (int round = 0; round < n_gp_rounds && !found_solution; ++round) {
+        auto t_round_start = std::chrono::high_resolution_clock::now();
 
-        if (new_score < best_score ||
-            (new_score < tolerance && best_score < tolerance &&
-             candidates[sel_idx].size() < best_circuit.size())) {
-            best_score = new_score;
-            best_circuit = candidates[sel_idx].copy();
-            best_params = dec_results[si].params;
-            improved = true;
-        }
+        // Train GP (retrain each round with growing dataset)
+        surrogate_->reset();
+        auto train_result = surrogate_->train_window(X, y, d_filter_lo, d_filter_hi);
+        if (train_result.n_train == 0) break;
 
-        if (new_score < tolerance &&
-            static_cast<int>(candidates[sel_idx].size()) >= win_lo &&
-            static_cast<int>(candidates[sel_idx].size()) <= win_hi) {
-            found_solution = true;
-            break;
-        }
-    }
+        double scale = train_result.scale;
 
-    // P3: Multi-restart BFGS for near-threshold candidates
-    if (!found_solution) {
-        std::vector<int> retry_indices;
+        // Generate candidates
+        std::vector<GrayCode> candidates;
+        int n_local;
+        double avg_steps;
+        mutators_->generate_candidates(X, y.data(), static_cast<int>(X.size()),
+                                        candidates_per_iter,
+                                        surrogate_->cache(), surrogate_->gp(), scale,
+                                        train_result.log_y_norm.data(),
+                                        seen, candidates, n_local, avg_steps,
+                                        gen, win_lo, win_hi, 0.0);
+
+        if (candidates.empty()) break;
+
+        // LCB acquisition
+        int depth_adaptive_budget = std::max(60, static_cast<int>(eval_budget_base * 30.0 / std::sqrt(std::max(win_hi, 1))));
+        auto acq_result = surrogate_->select_candidates_lcb(
+            candidates, seen, kappa, d_penalty, win_hi, depth_adaptive_budget);
+
+        int n_sel = static_cast<int>(acq_result.selected_indices.size());
+        if (n_sel == 0) break;
+
+        // Decompose selected candidates
+        std::vector<GrayCode> sel_circuits(n_sel);
+        for (int si = 0; si < n_sel; ++si)
+            sel_circuits[si] = candidates[acq_result.selected_indices[si]].copy();
+
+        std::vector<DecompResult> dec_results;
+        parallel_decompose_batch(sel_circuits, dec_results);
+
+        // Update search state
         for (int si = 0; si < n_sel; ++si) {
-            double s = dec_results[si].score;
-            if (s >= 1e-6 && s < 1e-2)
-                retry_indices.push_back(si);
+            int sel_idx = acq_result.selected_indices[si];
+            double new_score = dec_results[si].score;
+
+            y.push_back(new_score);
+            all_params.push_back(dec_results[si].params);
+            X.push_back(candidates[sel_idx].copy());
+            wl_cache.register_circuit(candidates[sel_idx]);
+            decompose_time += dec_results[si].elapsed;
+            decompose_count++;
+
+            if (new_score < best_score ||
+                (new_score < tolerance && best_score < tolerance &&
+                 candidates[sel_idx].size() < best_circuit.size())) {
+                best_score = new_score;
+                best_circuit = candidates[sel_idx].copy();
+                best_params = dec_results[si].params;
+                improved = true;
+            }
+
+            if (new_score < tolerance &&
+                static_cast<int>(candidates[sel_idx].size()) >= win_lo &&
+                static_cast<int>(candidates[sel_idx].size()) <= win_hi) {
+                found_solution = true;
+                break;
+            }
         }
-        if (!retry_indices.empty()) {
-            const int n_restarts = 5;
-            std::ofstream flog(log_file, std::ios::app);
-            flog << "  P3 multi-restart BFGS: retrying " << retry_indices.size()
-                 << " near-threshold candidates" << std::endl;
 
-            for (int ri : retry_indices) {
-                int sel_idx = acq_result.selected_indices[ri];
-                const GrayCode& circ = candidates[sel_idx];
-                double orig_score = dec_results[ri].score;
+        // P3: Multi-restart BFGS for near-threshold candidates
+        if (!found_solution) {
+            std::vector<int> retry_indices;
+            for (int si = 0; si < n_sel; ++si) {
+                double s = dec_results[si].score;
+                if (s >= 1e-6 && s < 1e-2)
+                    retry_indices.push_back(si);
+            }
+            if (!retry_indices.empty()) {
+                const int n_restarts = 5;
+                std::ofstream flog(log_file, std::ios::app);
+                flog << "  P3 multi-restart BFGS: retrying " << retry_indices.size()
+                     << " near-threshold candidates" << std::endl;
 
-                for (int rs = 0; rs < n_restarts; ++rs) {
-                    auto retry_res = decompose(circ);
-                    decompose_count++;
+                for (int ri : retry_indices) {
+                    int sel_idx = acq_result.selected_indices[ri];
+                    const GrayCode& circ = candidates[sel_idx];
+                    double orig_score = dec_results[ri].score;
 
-                    if (retry_res.first < orig_score) {
-                        for (int xi = static_cast<int>(X.size()) - 1; xi >= 0; --xi) {
-                            if (X[xi] == circ) {
-                                y[xi] = retry_res.first;
-                                all_params[xi] = retry_res.second;
+                    for (int rs = 0; rs < n_restarts; ++rs) {
+                        auto retry_res = decompose(circ);
+                        decompose_count++;
+
+                        if (retry_res.first < orig_score) {
+                            for (int xi = static_cast<int>(X.size()) - 1; xi >= 0; --xi) {
+                                if (X[xi] == circ) {
+                                    y[xi] = retry_res.first;
+                                    all_params[xi] = retry_res.second;
+                                    break;
+                                }
+                            }
+                            orig_score = retry_res.first;
+
+                            if (retry_res.first < best_score ||
+                                (retry_res.first < tolerance && best_score < tolerance &&
+                                 circ.size() < best_circuit.size())) {
+                                best_score = retry_res.first;
+                                best_circuit = circ.copy();
+                                best_params = retry_res.second;
+                                improved = true;
+                            }
+                            if (retry_res.first < tolerance) {
+                                found_solution = true;
                                 break;
                             }
                         }
-                        orig_score = retry_res.first;
-
-                        if (retry_res.first < best_score ||
-                            (retry_res.first < tolerance && best_score < tolerance &&
-                             circ.size() < best_circuit.size())) {
-                            best_score = retry_res.first;
-                            best_circuit = circ.copy();
-                            best_params = retry_res.second;
-                            improved = true;
-                        }
-                        if (retry_res.first < tolerance) {
-                            found_solution = true;
-                            break;
-                        }
                     }
+                    if (found_solution) break;
                 }
-                if (found_solution) break;
             }
         }
-    }
 
-    auto t_total_end = std::chrono::high_resolution_clock::now();
-    double total_time = std::chrono::duration<double>(t_total_end - t_total_start).count();
+        // Log round
+        double spearman_rho = 0.0;
+        if (n_sel >= 5) {
+            std::vector<double> actual_scores(n_sel);
+            for (int si = 0; si < n_sel; ++si)
+                actual_scores[si] = dec_results[si].score;
+            spearman_rho = SurrogateModel::compute_rho(acq_result.gp_mu, actual_scores);
+        }
+        auto t_round_end = std::chrono::high_resolution_clock::now();
+        double round_time = std::chrono::duration<double>(t_round_end - t_round_start).count();
 
-    if (found_solution) {
-        std::ofstream flog(log_file, std::ios::app);
-        flog << "  SOLUTION at D=" << best_circuit.size()
-             << ", score=" << best_score
-             << " [one-shot GP, time=" << std::fixed << std::setprecision(2) << total_time << "s]"
-             << std::defaultfloat << std::endl;
-        return WINDOW_SUCCESS;
-    }
+        {
+            std::ofstream flog(log_file, std::ios::app);
+            flog << "  GP round " << round << "/" << n_gp_rounds
+                 << ": best=" << best_score
+                 << " n_train=" << train_result.n_train
+                 << " n_sel=" << n_sel
+                 << " rho=" << std::setprecision(3) << spearman_rho
+                 << " [time=" << std::fixed << std::setprecision(2) << round_time << "s]"
+                 << std::defaultfloat << std::endl;
+        }
 
-    // Compute and log rho
-    double spearman_rho = 0.0;
-    if (n_sel >= 5) {
-        std::vector<double> actual_scores(n_sel);
-        for (int si = 0; si < n_sel; ++si)
-            actual_scores[si] = dec_results[si].score;
-        spearman_rho = SurrogateModel::compute_rho(acq_result.gp_mu, actual_scores);
-    }
-
-    {
-        std::ofstream flog(log_file, std::ios::app);
-        flog << "  One-shot GP: best=" << best_score
-             << " n_train=" << train_result.n_train
-             << " n_sel=" << n_sel
-             << " rho=" << std::setprecision(3) << spearman_rho
-             << " [time=" << std::fixed << std::setprecision(2) << total_time << "s]"
-             << std::defaultfloat << std::endl;
+        if (found_solution) {
+            std::ofstream flog(log_file, std::ios::app);
+            flog << "  SOLUTION at D=" << best_circuit.size()
+                 << ", score=" << best_score << std::endl;
+            return WINDOW_SUCCESS;
+        }
     }
 
     // If we already have a solution at or below this window, that's success
