@@ -1453,7 +1453,7 @@ N_Qubit_Decomposition_Surrogate::run_window_search(
         // (produced by the raw formula at deep win_hi) dominate runtime. The LCB top-500
         // captures almost all the signal; deeper tail is noise.
         int depth_adaptive_budget = std::max(60,
-            std::min(500, static_cast<int>(eval_budget_base * 30.0 / std::sqrt(std::max(win_hi, 1)))));
+            std::min(1000, static_cast<int>(eval_budget_base * 30.0 / std::sqrt(std::max(win_hi, 1)))));
         auto acq_result = surrogate_->select_candidates_lcb(
             candidates, seen, kappa, d_penalty, win_hi, depth_adaptive_budget);
 
