@@ -44,6 +44,15 @@ struct CompressionCandidate {
     std::string key;
 };
 
+struct Phase1RemovalState {
+    std::shared_ptr<Gates_block> gate_structure;
+    std::vector<int> sequence;
+    Matrix_real parameters;
+    double current_minimum;
+    double decomposition_error;
+    int entangling_gate_num;
+};
+
 static bool is_entangling_gate_type(gate_type type) {
     switch (type) {
     case CNOT_OPERATION:
@@ -701,6 +710,66 @@ static Gates_block* construct_cnot_skeleton_gate_structure(
     return gate_structure;
 }
 
+static Matrix_real excise_skeleton_gate_params(
+    const Matrix_real& parent_params,
+    int parent_cnot_num,
+    int removed_position,
+    int qbit_num) {
+    int child_cnot_num = parent_cnot_num - 1;
+    int child_param_num = child_cnot_num * 6 + 3 * qbit_num;
+    int parent_gate_param_num = parent_cnot_num * 6;
+    Matrix_real child_params(1, child_param_num);
+
+    int dst = 0;
+    for (int idx = 0; idx < removed_position * 6; ++idx) {
+        child_params[dst++] = parent_params[idx];
+    }
+    for (int idx = (removed_position + 1) * 6; idx < parent_gate_param_num; ++idx) {
+        child_params[dst++] = parent_params[idx];
+    }
+    for (int idx = 0; idx < 3 * qbit_num; ++idx) {
+        child_params[dst++] = parent_params[parent_gate_param_num + idx];
+    }
+
+    return child_params;
+}
+
+static bool extract_cnot_skeleton_sequence(
+    Gates_block* gate_structure,
+    const std::vector<OSRGatePath>& paths,
+    const std::vector<std::pair<int, int>>& edges,
+    std::vector<int>& sequence) {
+    sequence.clear();
+    sequence.reserve(paths.size());
+
+    for (size_t path_idx = 0; path_idx < paths.size(); ++path_idx) {
+        Gate* gate = gate_at_path(gate_structure, paths[path_idx]);
+        if (gate == NULL || gate->get_type() != CNOT_OPERATION) {
+            return false;
+        }
+
+        int q0 = 0;
+        int q1 = 0;
+        if (!get_two_qubit_endpoint_pair(gate, q0, q1)) {
+            return false;
+        }
+
+        std::pair<int, int> edge(q0, q1);
+        if (edge.second < edge.first) {
+            std::swap(edge.first, edge.second);
+        }
+
+        std::vector<std::pair<int, int>>::const_iterator it =
+            std::find(edges.begin(), edges.end(), edge);
+        if (it == edges.end()) {
+            return false;
+        }
+        sequence.push_back(static_cast<int>(it - edges.begin()));
+    }
+
+    return true;
+}
+
 static int64_t limited_integer_power(int base, int exponent, int64_t limit) {
     int64_t value = 1;
     for (int idx = 0; idx < exponent; ++idx) {
@@ -723,49 +792,65 @@ static std::vector<CompressionCandidate> generate_cnot_skeleton_candidates(
         return candidates;
     }
 
-    int target_depth = options.skeleton_target_cnots;
-    if (target_depth < 0) {
-        int removed = options.max_removed_gates >= 0 ? options.max_removed_gates : 2;
-        target_depth = original_entangling_gate_num - removed;
+    int min_target;
+    int max_target;
+    if (options.skeleton_target_cnots >= 0) {
+        min_target = options.skeleton_target_cnots;
+        max_target = options.skeleton_target_cnots;
+    } else {
+        min_target = std::max(1, qbit_num - 1);
+        max_target = original_entangling_gate_num - 1;
     }
-    if (target_depth < 0 || target_depth >= original_entangling_gate_num) {
+    if (max_target < min_target || max_target < 0 ||
+        max_target >= original_entangling_gate_num) {
         return candidates;
     }
 
     int edge_num = static_cast<int>(edges.size());
-    int64_t combination_num = limited_integer_power(
-        edge_num, target_depth, static_cast<int64_t>(options.skeleton_max_candidates));
-
-    if (combination_num > options.skeleton_max_candidates) {
-        return candidates;
-    }
-
     std::set<std::string> seen;
-    for (int64_t state = 0; state < combination_num; ++state) {
-        int64_t value = state;
-        std::vector<int> sequence(target_depth, 0);
-        for (int depth = target_depth - 1; depth >= 0; --depth) {
-            sequence[depth] = static_cast<int>(value % edge_num);
-            value /= edge_num;
+
+    for (int target_depth = min_target; target_depth <= max_target; ++target_depth) {
+        int remaining_budget =
+            options.skeleton_max_candidates - static_cast<int>(candidates.size());
+        if (remaining_budget <= 0) {
+            break;
         }
 
-        std::shared_ptr<Gates_block> gate_structure(
-            construct_cnot_skeleton_gate_structure(qbit_num, edges, sequence));
-        if (!gate_structure) {
+        int64_t combination_num = limited_integer_power(
+            edge_num, target_depth, static_cast<int64_t>(remaining_budget));
+        if (combination_num > remaining_budget) {
             continue;
         }
 
-        std::string key = gate_structure_signature(gate_structure.get());
-        if (!seen.insert(key).second) {
-            continue;
-        }
+        for (int64_t state = 0; state < combination_num; ++state) {
+            int64_t value = state;
+            std::vector<int> sequence(target_depth, 0);
+            for (int depth = target_depth - 1; depth >= 0; --depth) {
+                sequence[depth] = static_cast<int>(value % edge_num);
+                value /= edge_num;
+            }
 
-        CompressionCandidate candidate;
-        candidate.entangling_gate_num = target_depth;
-        candidate.gate_structure = gate_structure;
-        candidate.key = key;
-        candidate.initial_parameters = Matrix_real(0, 0);
-        candidates.push_back(candidate);
+            std::shared_ptr<Gates_block> gate_structure(
+                construct_cnot_skeleton_gate_structure(qbit_num, edges, sequence));
+            if (!gate_structure) {
+                continue;
+            }
+
+            std::string key = gate_structure_signature(gate_structure.get());
+            if (!seen.insert(key).second) {
+                continue;
+            }
+
+            CompressionCandidate candidate;
+            candidate.entangling_gate_num = target_depth;
+            candidate.gate_structure = gate_structure;
+            candidate.key = key;
+            candidate.initial_parameters = Matrix_real(0, 0);
+            candidate.score.min_remaining_cnots = std::numeric_limits<int>::max();
+            candidate.score.kappa = std::numeric_limits<double>::infinity();
+            candidate.score.residual = std::numeric_limits<double>::infinity();
+            candidates.push_back(candidate);
+        }
     }
 
     return candidates;
@@ -1067,6 +1152,7 @@ void N_Qubit_Decomposition_OSR_Compression::start_decomposition() {
         compress_gate_structure(original_gate_structure.get());
 
     if (!result.reached_tolerance &&
+        result.compressed_entangling_gate_num >= result.original_entangling_gate_num &&
         original_parameters.size() == original_gate_structure->get_parameter_num()) {
         double original_cost = optimization_problem(original_parameters);
         if (original_cost < optimization_tolerance_loc ||
@@ -1091,6 +1177,9 @@ void N_Qubit_Decomposition_OSR_Compression::start_decomposition() {
         current_minimum = result.current_minimum;
         decomposition_error = result.decomposition_error;
     } else {
+        if (optimized_parameters_mtx.size() != get_parameter_num()) {
+            optimized_parameters_mtx = Matrix_real(0, 0);
+        }
         N_Qubit_Decomposition_custom::start_decomposition();
     }
 }
@@ -1340,14 +1429,26 @@ void N_Qubit_Decomposition_OSR_Compression::validate_compressed_gate_structure(
             prepare_custom_optimizer(gate_structure_in, cost_fnc);
 
         std::vector<double> optimized_parameters(cDecomp_custom_random.get_parameter_num());
-        if (iter == 0 && initial_parameters.size() == cDecomp_custom_random.get_parameter_num()) {
+        if (iter == 0 && initial_parameters.size() > 0) {
+            int n_use = std::min(
+                static_cast<int>(initial_parameters.size()),
+                cDecomp_custom_random.get_parameter_num());
             std::copy(initial_parameters.get_data(),
-                      initial_parameters.get_data() + initial_parameters.size(),
+                      initial_parameters.get_data() + n_use,
                       optimized_parameters.begin());
-        } else if (iter == 0 && optimized_parameters_mtx.size() == cDecomp_custom_random.get_parameter_num()) {
+            for (int idx = n_use; idx < cDecomp_custom_random.get_parameter_num(); ++idx) {
+                optimized_parameters[idx] = distrib_real(gen);
+            }
+        } else if (iter == 0 && optimized_parameters_mtx.size() > 0) {
+            int n_use = std::min(
+                static_cast<int>(optimized_parameters_mtx.size()),
+                cDecomp_custom_random.get_parameter_num());
             std::copy(optimized_parameters_mtx.get_data(),
-                      optimized_parameters_mtx.get_data() + optimized_parameters_mtx.size(),
+                      optimized_parameters_mtx.get_data() + n_use,
                       optimized_parameters.begin());
+            for (int idx = n_use; idx < cDecomp_custom_random.get_parameter_num(); ++idx) {
+                optimized_parameters[idx] = distrib_real(gen);
+            }
         } else {
             for (size_t idx = 0; idx < optimized_parameters.size(); ++idx) {
                 optimized_parameters[idx] = distrib_real(gen);
@@ -1383,7 +1484,362 @@ N_Qubit_Decomposition_OSR_Compression::compress_gate_structure(
     }
 
     N_Qubit_Decomposition_OSR_Compression_Options options = get_osr_compression_options();
-    std::vector<OSRGatePath> removable_paths = collect_entangling_gate_paths(gate_structure_in);
+    int original_entangling_gate_num =
+        static_cast<int>(collect_entangling_gate_paths(gate_structure_in).size());
+
+    int max_removed = options.max_removed_gates < 0
+        ? original_entangling_gate_num
+        : std::min(options.max_removed_gates, original_entangling_gate_num);
+
+    Matrix_real search_initial_parameters = optimized_parameters_mtx.size() == gate_structure_in->get_parameter_num()
+        ? optimized_parameters_mtx.copy()
+        : Matrix_real(0, 0);
+    std::unique_ptr<Gates_block> phase1_gate_structure;
+    Gates_block* search_gate_structure = gate_structure_in;
+    int phase1_removed_num = 0;
+    N_Qubit_Decomposition_OSR_Compression_Result best_phase1_result;
+
+    if (options.validate_final && max_removed >= 1) {
+        std::vector<OSRGatePath> original_paths =
+            collect_entangling_gate_paths(gate_structure_in);
+        bool phase1_topology_user_set = !this->topology.empty();
+        std::vector<matrix_base<int>> phase1_active_topology = phase1_topology_user_set
+            ? this->topology
+            : topology_from_gate_structure(gate_structure_in, qbit_num);
+        std::vector<std::pair<int, int>> phase1_edges =
+            topology_pairs_from_matrices(phase1_active_topology);
+
+        std::vector<int> root_sequence;
+        if (!phase1_edges.empty() &&
+            extract_cnot_skeleton_sequence(
+                gate_structure_in, original_paths, phase1_edges, root_sequence)) {
+                std::vector<Phase1RemovalState> phase1_beam;
+                std::unique_ptr<Gates_block> root_skeleton(
+                    construct_cnot_skeleton_gate_structure(qbit_num, phase1_edges, root_sequence));
+                if (root_skeleton) {
+                    N_Qubit_Decomposition_OSR_Compression_Result root_skeleton_result;
+                    validate_compressed_gate_structure(
+                        root_skeleton.get(), search_initial_parameters, root_skeleton_result);
+                    if (root_skeleton_result.reached_tolerance) {
+                        Phase1RemovalState skeleton_root_state;
+                        skeleton_root_state.gate_structure.reset(root_skeleton.release());
+                        skeleton_root_state.sequence = root_sequence;
+                        skeleton_root_state.parameters = root_skeleton_result.optimized_parameters.copy();
+                        skeleton_root_state.current_minimum = root_skeleton_result.current_minimum;
+                        skeleton_root_state.decomposition_error = root_skeleton_result.decomposition_error;
+                        skeleton_root_state.entangling_gate_num =
+                            static_cast<int>(root_sequence.size());
+                        phase1_beam.push_back(skeleton_root_state);
+                    }
+                }
+
+                Phase1RemovalState imported_root_state;
+                imported_root_state.gate_structure.reset(gate_structure_in->clone());
+                imported_root_state.sequence = root_sequence;
+                imported_root_state.parameters = search_initial_parameters.copy();
+                imported_root_state.current_minimum = 0.0;
+                imported_root_state.decomposition_error = 0.0;
+                imported_root_state.entangling_gate_num = static_cast<int>(root_sequence.size());
+                phase1_beam.push_back(imported_root_state);
+
+                std::set<std::string> phase1_seen;
+                {
+                    std::stringstream key_stream;
+                    append_int_vector_signature(key_stream, root_sequence);
+                    phase1_seen.insert(key_stream.str());
+                }
+
+                bool found_any_phase1_removal = false;
+                Phase1RemovalState best_phase1_state;
+
+                for (int depth = 0; depth < max_removed; ++depth) {
+                    std::vector<Phase1RemovalState> next_beam;
+                    int max_removals_this_depth =
+                        qbit_num <= 3
+                            ? std::numeric_limits<int>::max()
+                            : 2 * static_cast<int>(phase1_beam[0].sequence.size());
+                    int generated_this_depth = 0;
+
+                    for (size_t state_idx = 0; state_idx < phase1_beam.size(); ++state_idx) {
+                        if (generated_this_depth >= max_removals_this_depth) {
+                            break;
+                        }
+                        Phase1RemovalState& state = phase1_beam[state_idx];
+                        int parent_cnot_num = static_cast<int>(state.sequence.size());
+                        if (parent_cnot_num <= 0) {
+                            continue;
+                        }
+
+                        bool parent_has_skeleton_params =
+                            state.parameters.size() == parent_cnot_num * 6 + 3 * qbit_num;
+                        std::vector<std::pair<double, int>> removal_positions;
+                        removal_positions.reserve(parent_cnot_num);
+                        for (int pos = 0; pos < parent_cnot_num; ++pos) {
+                            double triviality = 0.0;
+                            if (parent_has_skeleton_params) {
+                                for (int param = 0; param < 6; ++param) {
+                                    double theta = state.parameters[pos * 6 + param];
+                                    double k = std::round(theta / (M_PI / 2.0));
+                                    triviality += std::abs(theta - k * M_PI / 2.0);
+                                }
+                            } else {
+                                triviality = static_cast<double>(pos);
+                            }
+                            removal_positions.push_back(std::make_pair(triviality, pos));
+                        }
+                        std::sort(removal_positions.begin(), removal_positions.end());
+                        int max_positions = std::min(
+                            static_cast<int>(removal_positions.size()),
+                            2 * parent_cnot_num);
+
+                        for (int position_idx = 0; position_idx < max_positions; ++position_idx) {
+                            if (generated_this_depth >= max_removals_this_depth) {
+                                break;
+                            }
+                            int remove_pos = removal_positions[position_idx].second;
+                            std::vector<int> child_sequence = state.sequence;
+                            child_sequence.erase(child_sequence.begin() + remove_pos);
+
+                            std::stringstream key_stream;
+                            append_int_vector_signature(key_stream, child_sequence);
+                            if (!phase1_seen.insert(key_stream.str()).second) {
+                                continue;
+                            }
+                            generated_this_depth++;
+
+                            std::unique_ptr<Gates_block> child_gate_structure(
+                                construct_cnot_skeleton_gate_structure(
+                                    qbit_num, phase1_edges, child_sequence));
+                            if (!child_gate_structure) {
+                                continue;
+                            }
+
+                            Matrix_real child_initial_parameters =
+                                parent_has_skeleton_params
+                                    ? excise_skeleton_gate_params(
+                                          state.parameters, parent_cnot_num, remove_pos, qbit_num)
+                                    : state.parameters.copy();
+
+                            N_Qubit_Decomposition_OSR_Compression_Result child_result;
+                            child_result.gate_structure.reset(child_gate_structure.release());
+                            child_result.original_entangling_gate_num = original_entangling_gate_num;
+                            child_result.compressed_entangling_gate_num =
+                                static_cast<int>(child_sequence.size());
+
+                            validate_compressed_gate_structure(
+                                child_result.gate_structure.get(),
+                                child_initial_parameters,
+                                child_result);
+
+                            if (!child_result.reached_tolerance) {
+                                continue;
+                            }
+
+                            Phase1RemovalState child;
+                            child.gate_structure.reset(child_result.gate_structure.release());
+                            child.sequence = child_sequence;
+                            child.parameters = child_result.optimized_parameters.copy();
+                            child.current_minimum = child_result.current_minimum;
+                            child.decomposition_error = child_result.decomposition_error;
+                            child.entangling_gate_num =
+                                static_cast<int>(child_sequence.size());
+                            next_beam.push_back(child);
+
+                            if (!found_any_phase1_removal ||
+                                child.entangling_gate_num < best_phase1_state.entangling_gate_num ||
+                                (child.entangling_gate_num == best_phase1_state.entangling_gate_num &&
+                                 child.current_minimum < best_phase1_state.current_minimum)) {
+                                best_phase1_state = child;
+                                found_any_phase1_removal = true;
+                            }
+                        }
+                    }
+
+                    if (next_beam.empty()) {
+                        break;
+                    }
+
+                    std::sort(next_beam.begin(), next_beam.end(),
+                        [](const Phase1RemovalState& lhs, const Phase1RemovalState& rhs) {
+                            if (lhs.entangling_gate_num != rhs.entangling_gate_num) {
+                                return lhs.entangling_gate_num < rhs.entangling_gate_num;
+                            }
+                            return lhs.current_minimum < rhs.current_minimum;
+                        });
+                    if (static_cast<int>(next_beam.size()) > options.beam_width) {
+                        next_beam.resize(options.beam_width);
+                    }
+                    phase1_beam.swap(next_beam);
+                }
+
+                if (found_any_phase1_removal) {
+                    phase1_removed_num =
+                        original_entangling_gate_num - best_phase1_state.entangling_gate_num;
+                    search_initial_parameters = best_phase1_state.parameters.copy();
+                    phase1_gate_structure.reset(best_phase1_state.gate_structure->clone());
+                    search_gate_structure = phase1_gate_structure.get();
+
+                    best_phase1_result.gate_structure.reset(best_phase1_state.gate_structure->clone());
+                    best_phase1_result.optimized_parameters = best_phase1_state.parameters.copy();
+                    best_phase1_result.current_minimum = best_phase1_state.current_minimum;
+                    best_phase1_result.decomposition_error = best_phase1_state.decomposition_error;
+                    best_phase1_result.original_entangling_gate_num = original_entangling_gate_num;
+                    best_phase1_result.compressed_entangling_gate_num =
+                        best_phase1_state.entangling_gate_num;
+                    best_phase1_result.validated = true;
+                    best_phase1_result.reached_tolerance = true;
+                }
+
+                if (verbose > 0) {
+                    std::stringstream sstream;
+                    sstream << "OSR compression skeleton Phase 1 removed " << phase1_removed_num
+                            << " CNOTs; best skeleton CNOTs: "
+                            << (found_any_phase1_removal
+                                    ? best_phase1_state.entangling_gate_num
+                                    : original_entangling_gate_num)
+                            << std::endl;
+                    print(sstream, 1);
+                }
+
+                if (best_phase1_result.gate_structure) {
+                    return best_phase1_result;
+                }
+        }
+
+        if (!best_phase1_result.gate_structure) {
+            Phase1RemovalState root_state;
+            root_state.gate_structure.reset(gate_structure_in->clone());
+            root_state.parameters = search_initial_parameters.copy();
+            root_state.current_minimum = std::numeric_limits<double>::infinity();
+            root_state.decomposition_error = std::numeric_limits<double>::infinity();
+            root_state.entangling_gate_num = original_entangling_gate_num;
+
+            std::vector<Phase1RemovalState> phase1_beam(1, root_state);
+            std::set<std::string> phase1_seen;
+            phase1_seen.insert(gate_structure_signature(gate_structure_in));
+            bool found_any_phase1_removal = false;
+            Phase1RemovalState best_phase1_state;
+
+            for (int depth = 0; depth < max_removed; ++depth) {
+                std::vector<Phase1RemovalState> next_beam;
+
+                for (size_t state_idx = 0; state_idx < phase1_beam.size(); ++state_idx) {
+                    Phase1RemovalState& state = phase1_beam[state_idx];
+                    std::vector<OSRGatePath> current_paths =
+                        collect_entangling_gate_paths(state.gate_structure.get());
+                    if (current_paths.empty()) {
+                        continue;
+                    }
+
+                    for (int remove_id = 0; remove_id < static_cast<int>(current_paths.size()); ++remove_id) {
+                        Gate* gate = gate_at_path(state.gate_structure.get(), current_paths[remove_id]);
+                        if (gate == NULL || gate->get_type() != CNOT_OPERATION) {
+                            continue;
+                        }
+
+                        std::vector<int> removed_ids(1, remove_id);
+                        std::unique_ptr<Gates_block> candidate_gate_structure(
+                            clone_without_removed_paths(
+                                state.gate_structure.get(), current_paths, removed_ids));
+                        std::string candidate_key =
+                            gate_structure_signature(candidate_gate_structure.get());
+                        if (!phase1_seen.insert(candidate_key).second) {
+                            continue;
+                        }
+
+                        Matrix_real initial_parameters = reduced_parameters_without_removed_paths(
+                            state.gate_structure.get(), current_paths, removed_ids, state.parameters);
+
+                        N_Qubit_Decomposition_OSR_Compression_Result candidate_result;
+                        candidate_result.gate_structure.reset(candidate_gate_structure.release());
+                        candidate_result.original_entangling_gate_num = original_entangling_gate_num;
+                        candidate_result.compressed_entangling_gate_num =
+                            static_cast<int>(current_paths.size()) - 1;
+
+                        validate_compressed_gate_structure(
+                            candidate_result.gate_structure.get(), initial_parameters, candidate_result);
+
+                        if (!candidate_result.reached_tolerance) {
+                            continue;
+                        }
+
+                        Phase1RemovalState child;
+                        child.gate_structure.reset(candidate_result.gate_structure.release());
+                        child.parameters = candidate_result.optimized_parameters.copy();
+                        child.current_minimum = candidate_result.current_minimum;
+                        child.decomposition_error = candidate_result.decomposition_error;
+                        child.entangling_gate_num =
+                            static_cast<int>(current_paths.size()) - 1;
+                        next_beam.push_back(child);
+
+                        if (!found_any_phase1_removal ||
+                            child.entangling_gate_num < best_phase1_state.entangling_gate_num ||
+                            (child.entangling_gate_num == best_phase1_state.entangling_gate_num &&
+                             child.current_minimum < best_phase1_state.current_minimum)) {
+                            best_phase1_state = child;
+                            found_any_phase1_removal = true;
+                        }
+                    }
+                }
+
+                if (next_beam.empty()) {
+                    break;
+                }
+
+                std::sort(next_beam.begin(), next_beam.end(),
+                    [](const Phase1RemovalState& lhs, const Phase1RemovalState& rhs) {
+                        if (lhs.entangling_gate_num != rhs.entangling_gate_num) {
+                            return lhs.entangling_gate_num < rhs.entangling_gate_num;
+                        }
+                        return lhs.current_minimum < rhs.current_minimum;
+                    });
+                if (static_cast<int>(next_beam.size()) > options.beam_width) {
+                    next_beam.resize(options.beam_width);
+                }
+                phase1_beam.swap(next_beam);
+            }
+
+            if (found_any_phase1_removal) {
+                phase1_removed_num =
+                    original_entangling_gate_num - best_phase1_state.entangling_gate_num;
+
+                best_phase1_result.gate_structure.reset(best_phase1_state.gate_structure->clone());
+                best_phase1_result.optimized_parameters = best_phase1_state.parameters.copy();
+                best_phase1_result.current_minimum = best_phase1_state.current_minimum;
+                best_phase1_result.decomposition_error = best_phase1_state.decomposition_error;
+                best_phase1_result.original_entangling_gate_num = original_entangling_gate_num;
+                best_phase1_result.compressed_entangling_gate_num =
+                    best_phase1_state.entangling_gate_num;
+                best_phase1_result.validated = true;
+                best_phase1_result.reached_tolerance = true;
+            }
+
+            if (verbose > 0) {
+                std::stringstream sstream;
+                sstream << "OSR compression direct Phase 1 removed " << phase1_removed_num
+                        << " CNOTs; best CNOTs: "
+                        << (found_any_phase1_removal
+                                ? best_phase1_state.entangling_gate_num
+                                : original_entangling_gate_num)
+                        << std::endl;
+                print(sstream, 1);
+            }
+
+            if (best_phase1_result.gate_structure) {
+                return best_phase1_result;
+            }
+        }
+    }
+
+    std::vector<OSRGatePath> removable_paths = collect_entangling_gate_paths(search_gate_structure);
+    max_removed = options.max_removed_gates < 0
+        ? static_cast<int>(removable_paths.size())
+        : std::min(options.max_removed_gates - phase1_removed_num,
+                   static_cast<int>(removable_paths.size()));
+
+    if (max_removed <= 0 && best_phase1_result.gate_structure) {
+        return best_phase1_result;
+    }
 
     std::vector<std::vector<int>> all_cuts = unique_cuts(qbit_num);
     std::sort(all_cuts.begin(), all_cuts.end(), [](const std::vector<int>& a, const std::vector<int>& b) {
@@ -1396,7 +1852,7 @@ N_Qubit_Decomposition_OSR_Compression::compress_gate_structure(
     bool topology_user_set = !this->topology.empty();
     std::vector<matrix_base<int>> active_topology = topology_user_set
         ? this->topology
-        : topology_from_gate_structure(gate_structure_in, qbit_num);
+        : topology_from_gate_structure(search_gate_structure, qbit_num);
     std::vector<std::pair<int, int>> mutation_edges =
         (options.mutate_full_topology && !topology_user_set)
             ? complete_topology_pairs(qbit_num)
@@ -1405,19 +1861,13 @@ N_Qubit_Decomposition_OSR_Compression::compress_gate_structure(
 
     CompressionCandidate root;
     root.entangling_gate_num = static_cast<int>(removable_paths.size());
-    root.key = gate_structure_signature(gate_structure_in);
-    if (optimized_parameters_mtx.size() == gate_structure_in->get_parameter_num()) {
-        root.initial_parameters = optimized_parameters_mtx.copy();
-    }
+    root.key = gate_structure_signature(search_gate_structure);
+    root.initial_parameters = search_initial_parameters.copy();
     root.score = evaluate_gate_structure_osr(
-        gate_structure_in, root.initial_parameters, osr_bound_solver, all_cuts);
+        search_gate_structure, root.initial_parameters, osr_bound_solver, all_cuts);
 
     CompressionCandidate best = root;
     std::vector<CompressionCandidate> beam(1, root);
-
-    int max_removed = options.max_removed_gates < 0
-        ? static_cast<int>(removable_paths.size())
-        : std::min(options.max_removed_gates, static_cast<int>(removable_paths.size()));
 
     for (int depth = 1; depth <= max_removed; ++depth) {
         std::vector<CompressionCandidate> next_candidates;
@@ -1434,9 +1884,9 @@ N_Qubit_Decomposition_OSR_Compression::compress_gate_structure(
                     static_cast<int>(removable_paths.size()) - static_cast<int>(child.removed_ids.size());
 
                 std::unique_ptr<Gates_block> candidate_gate_structure(
-                    clone_without_removed_paths(gate_structure_in, removable_paths, child.removed_ids));
+                    clone_without_removed_paths(search_gate_structure, removable_paths, child.removed_ids));
                 child.initial_parameters = reduced_parameters_without_removed_paths(
-                    gate_structure_in, removable_paths, child.removed_ids, optimized_parameters_mtx);
+                    search_gate_structure, removable_paths, child.removed_ids, search_initial_parameters);
                 child.key = gate_structure_signature(candidate_gate_structure.get());
                 child.score = evaluate_gate_structure_osr(
                     candidate_gate_structure.get(), child.initial_parameters, osr_bound_solver, all_cuts);
@@ -1485,7 +1935,7 @@ N_Qubit_Decomposition_OSR_Compression::compress_gate_structure(
                 const CompressionCandidate& seed = mutation_seeds[seed_idx];
                 std::unique_ptr<Gates_block> seed_gate_structure(
                     clone_gate_structure_for_candidate(
-                        gate_structure_in, removable_paths, seed));
+                        search_gate_structure, removable_paths, seed));
 
                 std::vector<CompressionCandidate> local_mutations =
                     generate_local_mutation_candidates(
@@ -1560,7 +2010,7 @@ N_Qubit_Decomposition_OSR_Compression::compress_gate_structure(
 
     if (!options.validate_final) {
         result.gate_structure.reset(
-            clone_gate_structure_for_candidate(gate_structure_in, removable_paths, best));
+            clone_gate_structure_for_candidate(search_gate_structure, removable_paths, best));
         result.osr_score = best.score;
         for (size_t idx = 0; idx < best.removed_ids.size(); ++idx) {
             result.removed_gate_paths.push_back(removable_paths[best.removed_ids[idx]]);
@@ -1573,13 +2023,12 @@ N_Qubit_Decomposition_OSR_Compression::compress_gate_structure(
     N_Qubit_Decomposition_OSR_Compression_Result best_validated_result;
 
     best_validated_result.gate_structure.reset(
-        clone_gate_structure_for_candidate(gate_structure_in, removable_paths, root));
+        clone_gate_structure_for_candidate(search_gate_structure, removable_paths, root));
     best_validated_result.osr_score = root.score;
     best_validated_result.original_entangling_gate_num = static_cast<int>(removable_paths.size());
     best_validated_result.compressed_entangling_gate_num = root.entangling_gate_num;
     validate_compressed_gate_structure(
         best_validated_result.gate_structure.get(), root.initial_parameters, best_validated_result);
-    selected_validated_candidate = true;
 
     for (size_t idx = 0; idx < validation_pool.size(); ++idx) {
         const CompressionCandidate& candidate = validation_pool[idx];
@@ -1588,7 +2037,7 @@ N_Qubit_Decomposition_OSR_Compression::compress_gate_structure(
         }
         N_Qubit_Decomposition_OSR_Compression_Result candidate_result;
         candidate_result.gate_structure.reset(
-            clone_gate_structure_for_candidate(gate_structure_in, removable_paths, candidate));
+            clone_gate_structure_for_candidate(search_gate_structure, removable_paths, candidate));
         candidate_result.osr_score = candidate.score;
         candidate_result.original_entangling_gate_num = static_cast<int>(removable_paths.size());
         candidate_result.compressed_entangling_gate_num = candidate.entangling_gate_num;
@@ -1608,6 +2057,7 @@ N_Qubit_Decomposition_OSR_Compression::compress_gate_structure(
             (!candidate_result.reached_tolerance && !best_validated_result.reached_tolerance &&
              candidate_result.current_minimum < best_validated_result.current_minimum)) {
             best_validated_result = std::move(candidate_result);
+            selected_validated_candidate = true;
         }
 
         if (best_validated_result.reached_tolerance &&
@@ -1620,12 +2070,31 @@ N_Qubit_Decomposition_OSR_Compression::compress_gate_structure(
         return best_validated_result;
     }
 
-    result.gate_structure.reset(
-        clone_gate_structure_for_candidate(gate_structure_in, removable_paths, best));
-    result.osr_score = best.score;
-    for (size_t idx = 0; idx < best.removed_ids.size(); ++idx) {
-        result.removed_gate_paths.push_back(removable_paths[best.removed_ids[idx]]);
+    if (phase1_removed_num > 0 && best_validated_result.reached_tolerance) {
+        return best_validated_result;
     }
-    result.compressed_entangling_gate_num = best.entangling_gate_num;
+
+    const CompressionCandidate* fallback = &best;
+    for (size_t idx = 0; idx < validation_pool.size(); ++idx) {
+        const CompressionCandidate& cand = validation_pool[idx];
+        if (compression_candidate_key(cand) == root.key) {
+            continue;
+        }
+        if (!candidate_is_osr_admissible(cand, options)) {
+            continue;
+        }
+        bool fallback_is_root = compression_candidate_key(*fallback) == root.key;
+        if (fallback_is_root || cand.entangling_gate_num < fallback->entangling_gate_num) {
+            fallback = &cand;
+        }
+    }
+
+    result.gate_structure.reset(
+        clone_gate_structure_for_candidate(search_gate_structure, removable_paths, *fallback));
+    result.osr_score = fallback->score;
+    for (size_t idx = 0; idx < fallback->removed_ids.size(); ++idx) {
+        result.removed_gate_paths.push_back(removable_paths[fallback->removed_ids[idx]]);
+    }
+    result.compressed_entangling_gate_num = fallback->entangling_gate_num;
     return result;
 }
