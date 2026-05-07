@@ -734,6 +734,31 @@ static Matrix_real excise_skeleton_gate_params(
     return child_params;
 }
 
+static Matrix_real excise_skeleton_gate_params_multi(
+    const Matrix_real& parent_params,
+    int parent_cnot_num,
+    const std::vector<int>& removed_positions,
+    int qbit_num) {
+    int n_remove = static_cast<int>(removed_positions.size());
+    int child_cnot_num = parent_cnot_num - n_remove;
+    int child_param_num = child_cnot_num * 6 + 3 * qbit_num;
+    int parent_gate_param_num = parent_cnot_num * 6;
+
+    std::vector<bool> remove_mask(parent_cnot_num, false);
+    for (int pos : removed_positions) remove_mask[pos] = true;
+
+    Matrix_real child_params(1, child_param_num);
+    int dst = 0;
+    for (int g = 0; g < parent_cnot_num; ++g) {
+        if (remove_mask[g]) continue;
+        for (int p = 0; p < 6; ++p) child_params[dst++] = parent_params[g * 6 + p];
+    }
+    for (int idx = 0; idx < 3 * qbit_num; ++idx) {
+        child_params[dst++] = parent_params[parent_gate_param_num + idx];
+    }
+    return child_params;
+}
+
 static bool extract_cnot_skeleton_sequence(
     Gates_block* gate_structure,
     const std::vector<OSRGatePath>& paths,
@@ -850,6 +875,174 @@ static std::vector<CompressionCandidate> generate_cnot_skeleton_candidates(
             candidate.score.kappa = std::numeric_limits<double>::infinity();
             candidate.score.residual = std::numeric_limits<double>::infinity();
             candidates.push_back(candidate);
+        }
+    }
+
+    return candidates;
+}
+
+// Generate replacement skeletons that shorten 2q (or 3q) spans in the base
+// edge sequence whose CNOT count exceeds the OSR-bound allocation.
+//
+// Strategy: walk the linearized CNOT edge sequence of base_structure. Find
+// maximal contiguous runs whose union of carrier qubits has size <= the
+// configured limit (2 or 3). If a run's length exceeds the OSR-bound target
+// for that span, generate variant skeletons by replacing the run with shorter
+// length-T sequences over the carrier's edges and emit them as candidates.
+// Candidates carry no warm-start params and rely on the existing validation
+// pipeline (BFGS with random init + retries) to either confirm or reject.
+static std::vector<CompressionCandidate> generate_local_resynth_candidates(
+    Gates_block* base_structure,
+    const std::vector<std::pair<int, int>>& topology_edges,
+    const N_Qubit_Decomposition_OSR_Compression_Score& score,
+    int qbit_num,
+    const N_Qubit_Decomposition_OSR_Compression_Options& options) {
+    std::vector<CompressionCandidate> candidates;
+    if (!options.enable_local_resynth || base_structure == NULL ||
+        topology_edges.empty()) {
+        return candidates;
+    }
+
+    // Linearize the base into an edge-index sequence. If the structure isn't
+    // a clean U3+CNOT skeleton extraction will fail; bail out cleanly.
+    std::vector<OSRGatePath> paths = collect_entangling_gate_paths(base_structure);
+    if (paths.empty()) {
+        return candidates;
+    }
+    std::vector<int> base_seq;
+    if (!extract_cnot_skeleton_sequence(base_structure, paths, topology_edges, base_seq)) {
+        return candidates;
+    }
+    int original_cnot_num = static_cast<int>(base_seq.size());
+    if (original_cnot_num <= 0) {
+        return candidates;
+    }
+
+    int max_carrier = std::max(options.local_resynth_max_span_qubits, 2);
+    int budget = options.local_resynth_max_candidates;
+    if (budget <= 0) {
+        return candidates;
+    }
+
+    std::set<std::string> seen;
+
+    // Walk all spans [i..j] (inclusive) and check the carrier-size constraint.
+    for (int i = 0; i < original_cnot_num; ++i) {
+        std::set<int> carrier;
+        carrier.insert(topology_edges[base_seq[i]].first);
+        carrier.insert(topology_edges[base_seq[i]].second);
+        if (static_cast<int>(carrier.size()) > max_carrier) {
+            continue;
+        }
+
+        // Indices of edges within the carrier (used to enumerate replacements).
+        std::vector<int> carrier_edge_indices;
+        for (size_t e = 0; e < topology_edges.size(); ++e) {
+            int a = topology_edges[e].first;
+            int b = topology_edges[e].second;
+            if (carrier.count(a) > 0 && carrier.count(b) > 0) {
+                carrier_edge_indices.push_back(static_cast<int>(e));
+            }
+        }
+        if (carrier_edge_indices.empty()) {
+            continue;
+        }
+
+        for (int j = i; j < original_cnot_num; ++j) {
+            int a = topology_edges[base_seq[j]].first;
+            int b = topology_edges[base_seq[j]].second;
+            std::set<int> new_carrier = carrier;
+            new_carrier.insert(a);
+            new_carrier.insert(b);
+            if (static_cast<int>(new_carrier.size()) > max_carrier) {
+                break;
+            }
+            carrier = new_carrier;
+
+            int span_len = j - i + 1;
+            if (span_len < 2) {
+                continue;
+            }
+
+            // Recompute carrier_edge_indices with the (possibly grown) carrier.
+            std::vector<int> span_carrier_edges;
+            for (size_t e = 0; e < topology_edges.size(); ++e) {
+                int ea = topology_edges[e].first;
+                int eb = topology_edges[e].second;
+                if (carrier.count(ea) > 0 && carrier.count(eb) > 0) {
+                    span_carrier_edges.push_back(static_cast<int>(e));
+                }
+            }
+            if (span_carrier_edges.empty()) {
+                continue;
+            }
+
+            // Derive a target length from the OSR bound: sum edge_counts over
+            // edges inside the carrier, capped by the per-class depth limit.
+            int bound_sum = 0;
+            for (int e_idx : span_carrier_edges) {
+                if (e_idx >= 0 && e_idx < static_cast<int>(score.edge_counts.size())) {
+                    bound_sum += score.edge_counts[e_idx];
+                }
+            }
+            int hard_cap = (static_cast<int>(carrier.size()) <= 2)
+                ? options.local_resynth_max_depth_2q
+                : options.local_resynth_max_depth_3q;
+            int target_len = std::min(bound_sum, hard_cap);
+            target_len = std::max(target_len, 0);
+            if (target_len >= span_len) {
+                continue;
+            }
+
+            // Build replacement sequences of length target_len over the carrier's edges.
+            int n_carrier = static_cast<int>(span_carrier_edges.size());
+            int64_t combinations = limited_integer_power(
+                n_carrier, target_len, static_cast<int64_t>(budget));
+            if (combinations > budget) {
+                // Skip this span if enumeration would blow the budget; a deeper/narrower
+                // span may still fit.
+                continue;
+            }
+
+            for (int64_t state = 0; state < combinations; ++state) {
+                int64_t value = state;
+                std::vector<int> replacement(target_len, 0);
+                for (int d = target_len - 1; d >= 0; --d) {
+                    replacement[d] = span_carrier_edges[value % n_carrier];
+                    value /= n_carrier;
+                }
+
+                std::vector<int> new_seq;
+                new_seq.reserve(original_cnot_num - span_len + target_len);
+                new_seq.insert(new_seq.end(), base_seq.begin(), base_seq.begin() + i);
+                new_seq.insert(new_seq.end(), replacement.begin(), replacement.end());
+                new_seq.insert(new_seq.end(), base_seq.begin() + j + 1, base_seq.end());
+
+                std::shared_ptr<Gates_block> gate_structure(
+                    construct_cnot_skeleton_gate_structure(qbit_num, topology_edges, new_seq));
+                if (!gate_structure) {
+                    continue;
+                }
+
+                std::string key = gate_structure_signature(gate_structure.get());
+                if (!seen.insert(key).second) {
+                    continue;
+                }
+
+                CompressionCandidate candidate;
+                candidate.entangling_gate_num = static_cast<int>(new_seq.size());
+                candidate.gate_structure = gate_structure;
+                candidate.key = key;
+                candidate.initial_parameters = Matrix_real(0, 0);
+                candidate.score.min_remaining_cnots = std::numeric_limits<int>::max();
+                candidate.score.kappa = std::numeric_limits<double>::infinity();
+                candidate.score.residual = std::numeric_limits<double>::infinity();
+                candidates.push_back(candidate);
+
+                if (static_cast<int>(candidates.size()) >= budget) {
+                    return candidates;
+                }
+            }
         }
     }
 
@@ -1243,6 +1436,70 @@ N_Qubit_Decomposition_OSR_Compression::get_osr_compression_options() {
         config["osr_compression_skeleton_max_candidates"].get_property(int_value);
         options.skeleton_max_candidates = static_cast<int>(int_value);
     }
+    if (config.count("osr_compression_enable_triple_removal") > 0) {
+        config["osr_compression_enable_triple_removal"].get_property(int_value);
+        options.enable_triple_removal = int_value != 0;
+    }
+    if (config.count("osr_compression_triple_top_k") > 0) {
+        config["osr_compression_triple_top_k"].get_property(int_value);
+        options.triple_top_k = static_cast<int>(int_value);
+    }
+    if (config.count("osr_compression_max_pairs_per_parent") > 0) {
+        config["osr_compression_max_pairs_per_parent"].get_property(int_value);
+        options.max_pairs_per_parent = static_cast<int>(int_value);
+    }
+    if (config.count("osr_compression_max_triples_per_parent") > 0) {
+        config["osr_compression_max_triples_per_parent"].get_property(int_value);
+        options.max_triples_per_parent = static_cast<int>(int_value);
+    }
+    if (config.count("osr_compression_handoff_to_additive") > 0) {
+        config["osr_compression_handoff_to_additive"].get_property(int_value);
+        options.handoff_to_additive = int_value != 0;
+    }
+    if (config.count("osr_compression_eval_restarts") > 0) {
+        config["osr_compression_eval_restarts"].get_property(int_value);
+        options.osr_eval_restarts = static_cast<int>(int_value);
+    }
+    if (config.count("osr_compression_eval_polish_full") > 0) {
+        config["osr_compression_eval_polish_full"].get_property(int_value);
+        options.osr_eval_polish_full = int_value != 0;
+    }
+    if (config.count("osr_compression_eval_polish_iters") > 0) {
+        config["osr_compression_eval_polish_iters"].get_property(int_value);
+        options.osr_eval_polish_iters = static_cast<int>(int_value);
+    }
+    if (config.count("osr_compression_enable_local_resynth") > 0) {
+        config["osr_compression_enable_local_resynth"].get_property(int_value);
+        options.enable_local_resynth = int_value != 0;
+    }
+    if (config.count("osr_compression_local_resynth_max_span_qubits") > 0) {
+        config["osr_compression_local_resynth_max_span_qubits"].get_property(int_value);
+        options.local_resynth_max_span_qubits = static_cast<int>(int_value);
+    }
+    if (config.count("osr_compression_local_resynth_max_depth_2q") > 0) {
+        config["osr_compression_local_resynth_max_depth_2q"].get_property(int_value);
+        options.local_resynth_max_depth_2q = static_cast<int>(int_value);
+    }
+    if (config.count("osr_compression_local_resynth_max_depth_3q") > 0) {
+        config["osr_compression_local_resynth_max_depth_3q"].get_property(int_value);
+        options.local_resynth_max_depth_3q = static_cast<int>(int_value);
+    }
+    if (config.count("osr_compression_local_resynth_max_candidates") > 0) {
+        config["osr_compression_local_resynth_max_candidates"].get_property(int_value);
+        options.local_resynth_max_candidates = static_cast<int>(int_value);
+    }
+    if (config.count("osr_compression_validation_inner_iters") > 0) {
+        config["osr_compression_validation_inner_iters"].get_property(int_value);
+        options.validation_inner_iters = static_cast<int>(int_value);
+    }
+
+    options.osr_eval_restarts = std::max(options.osr_eval_restarts, 1);
+    options.osr_eval_polish_iters = std::max(options.osr_eval_polish_iters, 0);
+    options.local_resynth_max_span_qubits = std::max(options.local_resynth_max_span_qubits, 2);
+    options.local_resynth_max_depth_2q = std::max(options.local_resynth_max_depth_2q, 0);
+    options.local_resynth_max_depth_3q = std::max(options.local_resynth_max_depth_3q, 0);
+    options.local_resynth_max_candidates = std::max(options.local_resynth_max_candidates, 0);
+    options.validation_inner_iters = std::max(options.validation_inner_iters, 0);
 
     options.beam_width = std::max(options.beam_width, 1);
     options.validation_trials = std::max(options.validation_trials, 1);
@@ -1250,6 +1507,9 @@ N_Qubit_Decomposition_OSR_Compression::get_osr_compression_options() {
     options.mutation_rounds = std::max(options.mutation_rounds, 0);
     options.mutation_candidates = std::max(options.mutation_candidates, 0);
     options.skeleton_max_candidates = std::max(options.skeleton_max_candidates, 0);
+    options.triple_top_k = std::max(options.triple_top_k, 0);
+    options.max_pairs_per_parent = std::max(options.max_pairs_per_parent, 0);
+    options.max_triples_per_parent = std::max(options.max_triples_per_parent, 0);
 
     return options;
 }
@@ -1306,6 +1566,19 @@ N_Qubit_Decomposition_OSR_Compression::evaluate_gate_structure_osr(
     MinCnotBoundSolver& osr_bound_solver,
     std::vector<std::vector<int>>& all_cuts) {
     N_Qubit_Decomposition_OSR_Compression_Options options = get_osr_compression_options();
+    return evaluate_gate_structure_osr(
+        gate_structure_in, initial_parameters, osr_bound_solver, all_cuts,
+        options.osr_eval_restarts);
+}
+
+N_Qubit_Decomposition_OSR_Compression_Score
+N_Qubit_Decomposition_OSR_Compression::evaluate_gate_structure_osr(
+    Gates_block* gate_structure_in,
+    const Matrix_real& initial_parameters,
+    MinCnotBoundSolver& osr_bound_solver,
+    std::vector<std::vector<int>>& all_cuts,
+    int restarts) {
+    N_Qubit_Decomposition_OSR_Compression_Options options = get_osr_compression_options();
     N_Qubit_Decomposition_OSR_Compression_Score best_score;
     best_score.min_remaining_cnots = std::numeric_limits<int>::max();
     best_score.kappa = std::numeric_limits<double>::infinity();
@@ -1318,29 +1591,50 @@ N_Qubit_Decomposition_OSR_Compression::evaluate_gate_structure_osr(
         return best_score;
     }
 
+    int K = std::max(restarts, 1);
     double Fnorm = std::sqrt(static_cast<double>(1 << qbit_num));
     std::uniform_real_distribution<> distrib_real(0.0, 2 * M_PI);
 
+    N_Qubit_Decomposition_OSR_Compression_Options opts_loc = options;
+
     N_Qubit_Decomposition_custom cDecomp_custom_random =
         prepare_custom_optimizer(gate_structure_in, OSR_ENTANGLEMENT);
-    std::vector<double> optimized_parameters(cDecomp_custom_random.get_parameter_num());
-    if (initial_parameters.size() == cDecomp_custom_random.get_parameter_num()) {
+    int n_params = cDecomp_custom_random.get_parameter_num();
+    std::vector<double> warm_start_parameters(n_params);
+    if (initial_parameters.size() == n_params) {
         std::copy(initial_parameters.get_data(),
                   initial_parameters.get_data() + initial_parameters.size(),
-                  optimized_parameters.begin());
-    } else if (optimized_parameters_mtx.size() == cDecomp_custom_random.get_parameter_num()) {
+                  warm_start_parameters.begin());
+    } else if (optimized_parameters_mtx.size() == n_params) {
         std::copy(optimized_parameters_mtx.get_data(),
                   optimized_parameters_mtx.get_data() + optimized_parameters_mtx.size(),
-                  optimized_parameters.begin());
+                  warm_start_parameters.begin());
     } else {
-        for (size_t idx = 0; idx < optimized_parameters.size(); ++idx) {
-            optimized_parameters[idx] = distrib_real(gen);
+        for (int idx = 0; idx < n_params; ++idx) {
+            warm_start_parameters[idx] = distrib_real(gen);
         }
     }
-    if (!optimized_parameters.empty()) {
-        cDecomp_custom_random.set_optimized_parameters(
-            optimized_parameters.data(), static_cast<int>(optimized_parameters.size()));
+
+    // Optional one-shot full-circuit polish: refine warm_start_parameters at a
+    // real local minimum of the standard cost before judging OSR rank, so a
+    // bad random init doesn't make a removable gate look essential.
+    if (opts_loc.osr_eval_polish_full && n_params > 0) {
+        N_Qubit_Decomposition_custom cDecomp_polish =
+            prepare_custom_optimizer(gate_structure_in, cost_fnc);
+        cDecomp_polish.set_max_inner_iterations(opts_loc.osr_eval_polish_iters);
+        cDecomp_polish.set_optimized_parameters(
+            warm_start_parameters.data(), n_params);
+        cDecomp_polish.start_decomposition();
+        Matrix_real polished = cDecomp_polish.get_optimized_parameters();
+        if (polished.size() == n_params) {
+            std::copy(polished.get_data(), polished.get_data() + n_params,
+                      warm_start_parameters.begin());
+        }
     }
+
+    // Carry forward the best params from one (cut, rank) iteration to the next
+    // as a free warm start (mirrors the original code's implicit behavior).
+    std::vector<double> running_parameters = warm_start_parameters;
 
     for (const std::vector<int>& cut : all_cuts) {
         if (cut.size() != 1) {
@@ -1352,8 +1646,43 @@ N_Qubit_Decomposition_OSR_Compression::evaluate_gate_structure_osr(
         max_rank = std::max(max_rank, 1);
 
         for (int rank = max_rank - 1; rank >= 0; --rank) {
-            cDecomp_custom_random.set_osr_params({cut}, rank, false);
-            cDecomp_custom_random.start_decomposition();
+            // K-restart loop: pick the lowest-loss optimizer outcome among
+            // K trials before reading the OSR rank. Trial 0 inherits the
+            // running warm start; trials 1..K-1 fully randomize.
+            double best_loss_for_rank = std::numeric_limits<double>::infinity();
+            std::vector<double> best_params_for_rank(n_params);
+            for (int k_trial = 0; k_trial < K; ++k_trial) {
+                std::vector<double> trial_params(n_params);
+                if (k_trial == 0) {
+                    trial_params = running_parameters;
+                } else {
+                    for (int idx = 0; idx < n_params; ++idx) {
+                        trial_params[idx] = distrib_real(gen);
+                    }
+                }
+                if (n_params > 0) {
+                    cDecomp_custom_random.set_optimized_parameters(
+                        trial_params.data(), n_params);
+                }
+                cDecomp_custom_random.set_osr_params({cut}, rank, false);
+                cDecomp_custom_random.start_decomposition();
+
+                double trial_loss = cDecomp_custom_random.get_current_minimum();
+                if (trial_loss < best_loss_for_rank) {
+                    best_loss_for_rank = trial_loss;
+                    Matrix_real outp = cDecomp_custom_random.get_optimized_parameters();
+                    if (outp.size() == n_params) {
+                        std::copy(outp.get_data(), outp.get_data() + n_params,
+                                  best_params_for_rank.begin());
+                    }
+                }
+            }
+
+            if (n_params > 0) {
+                running_parameters = best_params_for_rank;
+                cDecomp_custom_random.set_optimized_parameters(
+                    best_params_for_rank.data(), n_params);
+            }
 
             Matrix U = Umtx.copy();
             Matrix_real params = cDecomp_custom_random.get_optimized_parameters();
@@ -1427,6 +1756,9 @@ void N_Qubit_Decomposition_OSR_Compression::validate_compressed_gate_structure(
     for (int iter = 0; iter < options.validation_trials; ++iter) {
         N_Qubit_Decomposition_custom cDecomp_custom_random =
             prepare_custom_optimizer(gate_structure_in, cost_fnc);
+        if (options.validation_inner_iters > 0) {
+            cDecomp_custom_random.set_max_inner_iterations(options.validation_inner_iters);
+        }
 
         std::vector<double> optimized_parameters(cDecomp_custom_random.get_parameter_num());
         if (iter == 0 && initial_parameters.size() > 0) {
@@ -1592,33 +1924,34 @@ N_Qubit_Decomposition_OSR_Compression::compress_gate_structure(
                             static_cast<int>(removal_positions.size()),
                             2 * parent_cnot_num);
 
-                        for (int position_idx = 0; position_idx < max_positions; ++position_idx) {
-                            if (generated_this_depth >= max_removals_this_depth) {
-                                break;
-                            }
-                            int remove_pos = removal_positions[position_idx].second;
+                        auto try_multi_removal = [&](const std::vector<int>& positions_desc) -> bool {
                             std::vector<int> child_sequence = state.sequence;
-                            child_sequence.erase(child_sequence.begin() + remove_pos);
-
+                            for (int p : positions_desc) {
+                                child_sequence.erase(child_sequence.begin() + p);
+                            }
                             std::stringstream key_stream;
                             append_int_vector_signature(key_stream, child_sequence);
-                            if (!phase1_seen.insert(key_stream.str()).second) {
-                                continue;
-                            }
-                            generated_this_depth++;
+                            if (!phase1_seen.insert(key_stream.str()).second) return false;
 
                             std::unique_ptr<Gates_block> child_gate_structure(
                                 construct_cnot_skeleton_gate_structure(
                                     qbit_num, phase1_edges, child_sequence));
-                            if (!child_gate_structure) {
-                                continue;
-                            }
+                            if (!child_gate_structure) return false;
 
-                            Matrix_real child_initial_parameters =
-                                parent_has_skeleton_params
-                                    ? excise_skeleton_gate_params(
-                                          state.parameters, parent_cnot_num, remove_pos, qbit_num)
-                                    : state.parameters.copy();
+                            Matrix_real child_initial_parameters;
+                            if (parent_has_skeleton_params) {
+                                if (positions_desc.size() == 1) {
+                                    child_initial_parameters = excise_skeleton_gate_params(
+                                        state.parameters, parent_cnot_num,
+                                        positions_desc[0], qbit_num);
+                                } else {
+                                    child_initial_parameters = excise_skeleton_gate_params_multi(
+                                        state.parameters, parent_cnot_num,
+                                        positions_desc, qbit_num);
+                                }
+                            } else {
+                                child_initial_parameters = state.parameters.copy();
+                            }
 
                             N_Qubit_Decomposition_OSR_Compression_Result child_result;
                             child_result.gate_structure.reset(child_gate_structure.release());
@@ -1631,9 +1964,7 @@ N_Qubit_Decomposition_OSR_Compression::compress_gate_structure(
                                 child_initial_parameters,
                                 child_result);
 
-                            if (!child_result.reached_tolerance) {
-                                continue;
-                            }
+                            if (!child_result.reached_tolerance) return false;
 
                             Phase1RemovalState child;
                             child.gate_structure.reset(child_result.gate_structure.release());
@@ -1652,6 +1983,55 @@ N_Qubit_Decomposition_OSR_Compression::compress_gate_structure(
                                 best_phase1_state = child;
                                 found_any_phase1_removal = true;
                             }
+                            return true;
+                        };
+
+                        // k=1: existing single-position removals.
+                        for (int position_idx = 0; position_idx < max_positions; ++position_idx) {
+                            if (generated_this_depth >= max_removals_this_depth) break;
+                            int remove_pos = removal_positions[position_idx].second;
+                            generated_this_depth++;
+                            try_multi_removal({remove_pos});
+                        }
+
+                        // k=2 and k=3: direct multi-position removals from the same parent.
+                        // Only run on parents with rotation params, since multi-position excision
+                        // assumes the skeleton-param layout (6 params per CNOT slot).
+                        if (options.enable_triple_removal && parent_has_skeleton_params) {
+                            int top_k = std::min({options.triple_top_k,
+                                                  static_cast<int>(removal_positions.size()),
+                                                  parent_cnot_num});
+
+                            // k=2
+                            int pairs_emitted = 0;
+                            for (int i = 0; i < top_k && pairs_emitted < options.max_pairs_per_parent; ++i) {
+                                for (int j = i + 1; j < top_k && pairs_emitted < options.max_pairs_per_parent; ++j) {
+                                    if (generated_this_depth >= max_removals_this_depth) break;
+                                    int pa = removal_positions[i].second;
+                                    int pb = removal_positions[j].second;
+                                    std::vector<int> positions_desc = {std::max(pa, pb), std::min(pa, pb)};
+                                    generated_this_depth++;
+                                    if (try_multi_removal(positions_desc)) pairs_emitted++;
+                                }
+                            }
+
+                            // k=3
+                            int triples_emitted = 0;
+                            int top_k_triples = std::min(top_k, parent_cnot_num);
+                            for (int i = 0; i < top_k_triples && triples_emitted < options.max_triples_per_parent; ++i) {
+                                for (int j = i + 1; j < top_k_triples && triples_emitted < options.max_triples_per_parent; ++j) {
+                                    for (int k = j + 1; k < top_k_triples && triples_emitted < options.max_triples_per_parent; ++k) {
+                                        if (generated_this_depth >= max_removals_this_depth) break;
+                                        int pa = removal_positions[i].second;
+                                        int pb = removal_positions[j].second;
+                                        int pc = removal_positions[k].second;
+                                        std::vector<int> positions_desc = {pa, pb, pc};
+                                        std::sort(positions_desc.begin(), positions_desc.end(), std::greater<int>());
+                                        generated_this_depth++;
+                                        if (try_multi_removal(positions_desc)) triples_emitted++;
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -1666,8 +2046,34 @@ N_Qubit_Decomposition_OSR_Compression::compress_gate_structure(
                             }
                             return lhs.current_minimum < rhs.current_minimum;
                         });
+
+                    // Diversity-preserving beam pruning: cap any single CNOT-count
+                    // class at half the beam to prevent multi-removal children from
+                    // starving the single-removal frontier. Without this, k=3 children
+                    // (which sort first by entangling_gate_num) can fill all beam slots
+                    // and evict the k=1 children that would have reached a better
+                    // global minimum on the next depth step.
                     if (static_cast<int>(next_beam.size()) > options.beam_width) {
-                        next_beam.resize(options.beam_width);
+                        std::vector<Phase1RemovalState> diversified;
+                        diversified.reserve(options.beam_width);
+                        int per_class_cap = std::max(1, options.beam_width / 2);
+                        std::map<int, int> class_counts;
+                        for (auto& s : next_beam) {
+                            if (static_cast<int>(diversified.size()) >= options.beam_width) break;
+                            int& c = class_counts[s.entangling_gate_num];
+                            if (c >= per_class_cap) continue;
+                            c++;
+                            diversified.push_back(std::move(s));
+                        }
+                        // If quota left some slots empty (e.g., only one class present),
+                        // fill remaining slots with the best leftovers ignoring caps.
+                        if (static_cast<int>(diversified.size()) < options.beam_width) {
+                            for (auto& s : next_beam) {
+                                if (static_cast<int>(diversified.size()) >= options.beam_width) break;
+                                if (s.gate_structure) diversified.push_back(std::move(s));
+                            }
+                        }
+                        next_beam.swap(diversified);
                     }
                     phase1_beam.swap(next_beam);
                 }
@@ -1703,6 +2109,20 @@ N_Qubit_Decomposition_OSR_Compression::compress_gate_structure(
 
                 if (best_phase1_result.gate_structure) {
                     return best_phase1_result;
+                }
+
+                // Additive-search handoff (opt-in via osr_compression_handoff_to_additive).
+                // When the deletion beam stalled (no CNOT reduction), the lowest-OSR
+                // skeleton would be handed to N_Qubit_Decomposition_Surrogate as a warm
+                // start. Deferred: Surrogate is not currently linked into the squander
+                // build target (the .cpp lives at the repo root and is absent from
+                // CMakeLists.txt / setup.py). Re-add Surrogate to the build, or retarget
+                // this handoff to N_Qubit_Decomposition_adaptive, before wiring the call.
+                if (options.handoff_to_additive && !found_any_phase1_removal && verbose > 0) {
+                    std::stringstream sstream;
+                    sstream << "OSR compression handoff_to_additive requested but deferred:"
+                            << " additive class not currently in build.\n";
+                    print(sstream, 1);
                 }
         }
 
@@ -1982,6 +2402,19 @@ N_Qubit_Decomposition_OSR_Compression::compress_gate_structure(
             validation_pool.end(), skeleton_candidates.begin(), skeleton_candidates.end());
     }
 
+    if (options.enable_local_resynth) {
+        std::vector<std::pair<int, int>> resynth_edges = topology_user_set
+            ? topology_pairs_from_matrices(active_topology)
+            : ((options.mutate_full_topology || qbit_num <= 3)
+                   ? complete_topology_pairs(qbit_num)
+                   : mutation_edges);
+        std::vector<CompressionCandidate> resynth_candidates =
+            generate_local_resynth_candidates(
+                search_gate_structure, resynth_edges, best.score, qbit_num, options);
+        validation_pool.insert(
+            validation_pool.end(), resynth_candidates.begin(), resynth_candidates.end());
+    }
+
     sort_unique_candidates(validation_pool, true);
     int validation_pool_limit = options.beam_width;
     if (options.enable_mutations) {
@@ -1989,6 +2422,9 @@ N_Qubit_Decomposition_OSR_Compression::compress_gate_structure(
     }
     if (options.enable_skeleton_search) {
         validation_pool_limit += options.skeleton_max_candidates;
+    }
+    if (options.enable_local_resynth) {
+        validation_pool_limit += options.local_resynth_max_candidates;
     }
     validation_pool_limit = std::max(validation_pool_limit, options.beam_width);
     if (static_cast<int>(validation_pool.size()) > validation_pool_limit) {

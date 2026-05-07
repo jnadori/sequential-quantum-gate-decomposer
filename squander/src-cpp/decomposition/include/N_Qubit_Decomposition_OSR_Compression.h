@@ -15,7 +15,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 /*! \file N_Qubit_Decomposition_OSR_Compression.h
-    \brief OSR-guided top-down compression for an existing gate structure.
+    \brief OSR-preserving deletion search over an existing gate structure.
+    OSR is used as a feasibility predicate (admissibility filter), not a
+    continuous optimization signal: when the input is already OSR=0, candidates
+    that remain OSR=0 are admissible, those that don't are rejected.
 */
 
 #ifndef N_Qubit_Decomposition_OSR_Compression_H
@@ -77,6 +80,55 @@ struct N_Qubit_Decomposition_OSR_Compression_Options {
     int skeleton_target_cnots = -1;
     /// Maximal number of synthesized skeletons admitted to final validation.
     int skeleton_max_candidates = 4096;
+    /// If true, also enumerate direct 2-position and 3-position removals at each beam step.
+    bool enable_triple_removal = true;
+    /// Top-K least-trivial positions per parent to use for k=2 / k=3 enumeration.
+    int triple_top_k = 6;
+    /// Cap on direct k=2 children emitted per parent state per beam step.
+    int max_pairs_per_parent = 32;
+    /// Cap on direct k=3 children emitted per parent state per beam step.
+    int max_triples_per_parent = 64;
+    /// If true and the deletion beam fails to reach OSR=0, hand the lowest-OSR
+    /// skeleton to N_Qubit_Decomposition_Surrogate as a warm start.
+    bool handoff_to_additive = false;
+    /// Number of random restarts per (cut, rank) sub-problem in evaluate_gate_structure_osr.
+    /// k=0 warm-starts from inherited params, k>=1 re-randomizes.
+    int osr_eval_restarts = 3;
+    /// If true, run a full-circuit BFGS polish before scoring OSR ranks.
+    bool osr_eval_polish_full = false;
+    /// Inner-iteration budget for the optional polish pre-pass.
+    int osr_eval_polish_iters = 200;
+    /// If true, re-synthesize 2q (and optionally 3q) spans whose CNOT count
+    /// exceeds the OSR-bound allocation for that span.
+    bool enable_local_resynth = true;
+    /// Maximum carrier-qubit count of a span to consider for re-synthesis.
+    int local_resynth_max_span_qubits = 3;
+    /// Hard depth cap for 2-qubit span re-synthesis (KAK upper bound is 3).
+    int local_resynth_max_depth_2q = 3;
+    /// Hard depth cap for 3-qubit span re-synthesis.
+    int local_resynth_max_depth_3q = 6;
+    /// Per-span cap on enumerated U3+CNOT skeleton candidates.
+    int local_resynth_max_candidates = 256;
+    /// Override BFGS max_inner_iterations during final candidate validation only.
+    /// 0 keeps the optimizer's default (10000 for BFGS). Bigger means each
+    /// validation BFGS pass works harder before giving up — useful when the
+    /// circuit has many shallow local minima.
+    int validation_inner_iters = 0;
+};
+
+/**
+@brief Description of a contiguous span of gates whose carrier qubits are
+small enough to re-synthesize as a unit.
+*/
+struct OSRLocalSpan {
+    /// Top-level indices in the parent Gates_block of the gates in this span.
+    std::vector<int> gate_indices;
+    /// Sorted carrier qubits (size 2 or 3).
+    std::vector<int> carrier_qubits;
+    /// Count of entangling gates currently in the span.
+    int current_cnot_count = 0;
+    /// Target entangling gate count from the OSR bound.
+    int target_cnot_count = 0;
 };
 
 /**
@@ -168,6 +220,13 @@ protected:
         const Matrix_real& initial_parameters,
         MinCnotBoundSolver& osr_bound_solver,
         std::vector<std::vector<int>>& all_cuts);
+
+    N_Qubit_Decomposition_OSR_Compression_Score evaluate_gate_structure_osr(
+        Gates_block* gate_structure_in,
+        const Matrix_real& initial_parameters,
+        MinCnotBoundSolver& osr_bound_solver,
+        std::vector<std::vector<int>>& all_cuts,
+        int restarts);
 
     N_Qubit_Decomposition_custom prepare_custom_optimizer(
         Gates_block* gate_structure_in,
