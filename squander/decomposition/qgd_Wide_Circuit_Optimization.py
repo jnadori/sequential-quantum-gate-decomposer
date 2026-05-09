@@ -9,7 +9,6 @@ from squander.decomposition.qgd_N_Qubit_Decompositions_Wrapper import (
     qgd_N_Qubit_Decomposition_Tabu_Search as N_Qubit_Decomposition_Tabu_Search,
 )
 from squander import N_Qubit_Decomposition_custom, N_Qubit_Decomposition
-from squander import N_Qubit_Decomposition_OSR_Compression
 from squander.gates.qgd_Circuit import qgd_Circuit as Circuit
 from squander.utils import CompareCircuits
 
@@ -452,6 +451,9 @@ class qgd_Wide_Circuit_Optimization:
         Used for partitions larger than ``config['osr_threshold']`` qubits when
         ``config['osr_for_large_partitions']`` is enabled.
         """
+        from squander.decomposition.qgd_N_Qubit_Decompositions_Wrapper import (
+            qgd_N_Qubit_Decomposition_OSR_Compression as N_Qubit_Decomposition_OSR_Compression,
+        )
         osr_config = dict(config.get("osr_config", {}))
         tolerance = osr_config.get("tolerance", config.get("tolerance", 1e-8))
         optimizer = osr_config.get("optimizer", "BFGS")
