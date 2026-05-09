@@ -9,6 +9,7 @@ from squander.decomposition.qgd_N_Qubit_Decompositions_Wrapper import (
     qgd_N_Qubit_Decomposition_Tabu_Search as N_Qubit_Decomposition_Tabu_Search,
 )
 from squander import N_Qubit_Decomposition_custom, N_Qubit_Decomposition
+from squander import N_Qubit_Decomposition_OSR_Compression
 from squander.gates.qgd_Circuit import qgd_Circuit as Circuit
 from squander.utils import CompareCircuits
 
@@ -439,6 +440,47 @@ class qgd_Wide_Circuit_Optimization:
         return wide_circuit, wide_parameters
 
     @staticmethod
+    def DecomposePartitionOSR(
+        Umtx: np.ndarray,
+        config: dict,
+        original_circuit: Circuit,
+        original_parameters: np.ndarray,
+    ) -> list[tuple[Circuit, np.ndarray]]:
+        """Decompose a partition unitary via OSR compression seeded with the original
+        partition's gate structure and parameters.
+
+        Used for partitions larger than ``config['osr_threshold']`` qubits when
+        ``config['osr_for_large_partitions']`` is enabled.
+        """
+        osr_config = dict(config.get("osr_config", {}))
+        tolerance = osr_config.get("tolerance", config.get("tolerance", 1e-8))
+        optimizer = osr_config.get("optimizer", "BFGS")
+        cost_variant = osr_config.get("cost_function_variant", 3)
+        verbosity = osr_config.get("verbosity", config.get("verbosity", 0))
+
+        decomp = N_Qubit_Decomposition_OSR_Compression(
+            np.ascontiguousarray(Umtx.conj().T), config=osr_config
+        )
+        decomp.set_Verbose(verbosity)
+        decomp.set_Optimizer(optimizer)
+        decomp.set_Cost_Function_Variant(cost_variant)
+        decomp.set_Gate_Structure(original_circuit)
+        decomp.set_Optimized_Parameters(np.ascontiguousarray(original_parameters))
+        decomp.set_Optimization_Tolerance(tolerance)
+
+        try:
+            decomp.Start_Decomposition()
+        except Exception as e:
+            raise e
+
+        circ = decomp.get_Circuit()
+        params = decomp.get_Optimized_Parameters()
+        err = decomp.get_Decomposition_Error()
+        if tolerance < err:
+            return []
+        return [(circ, params)]
+
+    @staticmethod
     def DecomposePartition(
         Umtx: np.ndarray, config: dict, mini_topology=None, structure=None
     ) -> list[tuple[Circuit, np.ndarray]]:
@@ -611,10 +653,17 @@ class qgd_Wide_Circuit_Optimization:
         # get the unitary representing the circuit
         unitary = remapped_subcircuit.get_Matrix(subcircuit_parameters)
 
-        # decompose a small unitary into a new circuit
-        all_decomposed = qgd_Wide_Circuit_Optimization.DecomposePartition(
-            unitary, config, mini_topology, structure=structure
-        )
+        # Route partitions larger than osr_threshold to OSR compression, seeded
+        # with the partition's existing gate structure and parameters.
+        osr_threshold = config.get("osr_threshold", 3)
+        if config.get("osr_for_large_partitions", False) and qbit_num > osr_threshold:
+            all_decomposed = qgd_Wide_Circuit_Optimization.DecomposePartitionOSR(
+                unitary, config, remapped_subcircuit, subcircuit_parameters
+            )
+        else:
+            all_decomposed = qgd_Wide_Circuit_Optimization.DecomposePartition(
+                unitary, config, mini_topology, structure=structure
+            )
         # create inverse qbit map:
         inverse_qbit_map = {}
         for key, value in qbit_map.items():
